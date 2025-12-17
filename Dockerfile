@@ -1,6 +1,9 @@
 # Use a Node image that includes the necessary libraries for Puppeteer
 FROM ghcr.io/puppeteer/puppeteer:21.5.2
 
+# Switch to root user temporarily to install dependencies and fix permissions
+USER root
+
 # Set working directory
 WORKDIR /usr/src/app
 
@@ -12,6 +15,12 @@ RUN npm ci
 
 # Copy source code
 COPY . .
+
+# GRANT PERMISSION: Give the 'pptruser' ownership of this folder so it can save PDFs
+RUN chown -R pptruser:pptruser /usr/src/app
+
+# Switch back to the secure user provided by the image
+USER pptruser
 
 # Expose port
 EXPOSE 3000
