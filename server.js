@@ -61,7 +61,7 @@ async function generatePDFFromHTML(html) {
 }
 
 async function uploadPDFToAirtable(pdfBuffer, recordId) {
-    const fileName = `Report_${recordId}.pdf`;
+    const fileName = `Report_${recordId}_${Date.now()}.pdf`;
     const filePath = path.join(__dirname, fileName);
     
     // 1. Save file locally so it can be served
