@@ -15,6 +15,10 @@ app.use(express.json());
 app.use(express.static(__dirname));
 
 app.post('/generate-pdf', async (req, res) => {
+    const secret = req.headers['x-auth-token'];
+    if (secret !== process.env.INTERNAL_AUTH_TOKEN) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
     // We only need htmlContent and recordId from Airtable
     const { htmlContent, recordId } = req.body;
 
