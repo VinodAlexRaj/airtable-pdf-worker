@@ -13,7 +13,7 @@ const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL; // Required for Airtable to
 
 app.use(express.json());
 // Create a folder named 'temp_pdfs' and only serve that
-app.use('/public', express.static(path.join(__dirname, 'temp_pdfs')));
+app.use('/public', express.static(path.join(__dirname, 'public')));
 
 app.post('/generate-pdf', async (req, res) => {
     const secret = req.headers['x-auth-token'];
@@ -76,17 +76,25 @@ async function generatePDFFromHTML(html) {
 
 async function uploadPDFToAirtable(pdfBuffer, recordId) {
     const fileName = `Report_${recordId}_${Date.now()}.pdf`;
-    const filePath = path.join(__dirname, fileName);
     
-    // 1. Save file locally so it can be served
+    // 1. Create a 'public' folder if it doesn't exist
+    const publicDir = path.join(__dirname, 'public');
+    if (!fs.existsSync(publicDir)) {
+        fs.mkdirSync(publicDir);
+    }
+
+    const filePath = path.join(publicDir, fileName);
+    
+    // 2. Save file to the public folder
     fs.writeFileSync(filePath, pdfBuffer);
 
-    // 2. Construct the public URL
-    // NOTE: This file is temporary. Ephemeral file systems get wiped on redeploy.
-    const publicUrl = `${PUBLIC_BASE_URL}/${fileName}`;
-    console.log(`File available at: ${publicUrl}`);
+    // 3. Fix the URL (Remove extra slashes)
+    const base = process.env.PUBLIC_BASE_URL.replace(/\/$/, ""); // Remove trailing slash if exists
+    const publicUrl = `${base}/public/${fileName}`;
+    
+    console.log(`File accessible at: ${publicUrl}`);
 
-    // 3. Send URL to Airtable
+    // 4. Update Airtable
     const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
 
     const response = await fetch(url, {
@@ -99,19 +107,11 @@ async function uploadPDFToAirtable(pdfBuffer, recordId) {
             records: [{
                 id: recordId,
                 fields: {
-                    [ATTACHMENT_FIELD]: [{
-                        url: publicUrl,
-                        filename: fileName
-                    }]
+                    [ATTACHMENT_FIELD]: [{ url: publicUrl }]
                 }
             }]
         })
     });
-
-    if (!response.ok) {
-        const errText = await response.text();
-        console.error('Airtable Error:', errText);
-    }
 
     return response.ok;
 }
