@@ -12,7 +12,8 @@ const ATTACHMENT_FIELD = 'Approval Attachment';
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL; // Required for Airtable to fetch the PDF
 
 app.use(express.json());
-app.use(express.static(__dirname));
+// Create a folder named 'temp_pdfs' and only serve that
+app.use('/public', express.static(path.join(__dirname, 'temp_pdfs')));
 
 app.post('/generate-pdf', async (req, res) => {
     const secret = req.headers['x-auth-token'];
