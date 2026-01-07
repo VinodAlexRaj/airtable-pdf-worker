@@ -76,23 +76,23 @@ async function generatePDFFromHTML(html) {
 
 async function uploadPDFToAirtable(pdfBuffer, recordId) {
     const fileName = `Report_${recordId}_${Date.now()}.pdf`;
-    
-    // 1. Create a 'public' folder if it doesn't exist
     const publicDir = path.join(__dirname, 'public');
+
+    // 1. Ensure public directory exists
     if (!fs.existsSync(publicDir)) {
         fs.mkdirSync(publicDir);
     }
 
     const filePath = path.join(publicDir, fileName);
     
-    // 2. Save file to the public folder
+    // 2. Write the file to disk
     fs.writeFileSync(filePath, pdfBuffer);
 
-    // 3. Fix the URL (Remove extra slashes)
-    const base = process.env.PUBLIC_BASE_URL.replace(/\/$/, ""); // Remove trailing slash if exists
+    // 3. Construct the clean URL
+    const base = process.env.PUBLIC_BASE_URL.replace(/\/$/, ""); 
     const publicUrl = `${base}/public/${fileName}`;
     
-    console.log(`File accessible at: ${publicUrl}`);
+    console.log(`File available for Airtable fetch at: ${publicUrl}`);
 
     // 4. Update Airtable
     const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
@@ -112,6 +112,19 @@ async function uploadPDFToAirtable(pdfBuffer, recordId) {
             }]
         })
     });
+
+    // --- ADDED: CLEANUP FUNCTION ---
+    // Wait 60 seconds, then delete the file to save space
+    setTimeout(() => {
+        fs.unlink(filePath, (err) => {
+            if (err) {
+                console.error(`Cleanup Error for ${fileName}:`, err);
+            } else {
+                console.log(`Cleanup Success: Deleted temporary file ${fileName}`);
+            }
+        });
+    }, 60000); // 60,000ms = 60 seconds
+    // -------------------------------
 
     return response.ok;
 }
