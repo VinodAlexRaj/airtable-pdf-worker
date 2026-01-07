@@ -53,13 +53,22 @@ app.listen(port, () => {
 async function generatePDFFromHTML(html) {
     const browser = await puppeteer.launch({ 
         headless: "new",
-        args: ['--no-sandbox', '--disable-setuid-sandbox'] 
+        // This is the standard path for Chrome in the Puppeteer Docker image
+        executablePath: '/usr/bin/google-chrome-stable', 
+        args: [
+            '--no-sandbox', 
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage' // Helps prevent 'Out of Memory' crashes
+        ] 
     });
     
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
     
-    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
+    const pdfBuffer = await page.pdf({ 
+        format: 'A4', 
+        printBackground: true 
+    });
 
     await browser.close();
     return pdfBuffer;

@@ -1,5 +1,5 @@
 # Use a Node image that includes the necessary libraries for Puppeteer
-FROM ghcr.io/puppeteer/puppeteer:21.5.2
+FROM ghcr.io/puppeteer/puppeteer:latest
 
 # Switch to root user temporarily to install dependencies and fix permissions
 USER root
