@@ -1,5 +1,5 @@
 # Use a Node image that includes the necessary libraries for Puppeteer
-FROM ghcr.io/puppeteer/puppeteer:latest
+FROM ghcr.io/puppeteer/puppeteer:21.5.2
 
 # Switch to root user temporarily to install dependencies and fix permissions
 USER root
@@ -9,6 +9,9 @@ WORKDIR /usr/src/app
 
 # Copy package files
 COPY package*.json ./
+
+# Tell puppeteer NOT to download a second browser; use the one in the image
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 # Install dependencies
 RUN npm ci
