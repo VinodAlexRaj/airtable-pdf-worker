@@ -7,6 +7,9 @@ USER root
 # Set working directory
 WORKDIR /usr/src/app
 
+# Set the cache path to the standard location for this image
+ENV PUPPETEER_CACHE_DIR=/home/pptruser/.cache/puppeteer
+
 # Copy package files
 COPY package*.json ./
 
