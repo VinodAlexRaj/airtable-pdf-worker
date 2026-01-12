@@ -1,7 +1,7 @@
 const express = require('express');
 const puppeteer = require('puppeteer');
-const fs = require('fs'); // Import fs
-const path = require('path'); // Import path
+const fs = require('fs');
+const path = require('path');
 const app = express();
 
 const port = process.env.PORT || 3000;
@@ -9,92 +9,64 @@ const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
 const AIRTABLE_TABLE_NAME = 'Patrolling Report'; 
 const ATTACHMENT_FIELD = 'Approval Attachment';
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL; // Required for Airtable to fetch the PDF
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
+const INTERNAL_AUTH_TOKEN = process.env.INTERNAL_AUTH_TOKEN;
 
 app.use(express.json());
-// Create a folder named 'temp_pdfs' and only serve that
+
+// FIXED: Specifically serve the public folder for PDF downloads
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
 app.post('/generate-pdf', async (req, res) => {
     const secret = req.headers['x-auth-token'];
-    if (secret !== process.env.INTERNAL_AUTH_TOKEN) {
+    if (secret !== INTERNAL_AUTH_TOKEN) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
-    // We only need htmlContent and recordId from Airtable
-    const { htmlContent, recordId } = req.body;
 
+    const { htmlContent, recordId } = req.body;
     if (!htmlContent || !recordId) {
-        return res.status(400).json({ error: 'Missing htmlContent or recordId' });
+        return res.status(400).json({ error: 'Missing data' });
     }
 
     try {
-        console.log(`Generating PDF for Record: ${recordId}`);
         const pdfBuffer = await generatePDFFromHTML(htmlContent);
-        
-        // Use the corrected function call (2 arguments)
         const success = await uploadPDFToAirtable(pdfBuffer, recordId);
 
         if (success) {
-            res.status(200).send({ message: 'PDF generated and attached successfully.' });
+            res.status(200).send({ message: 'PDF generated and attached.' });
         } else {
-            res.status(500).send({ error: 'Failed to upload PDF to Airtable.' });
+            res.status(500).send({ error: 'Airtable upload failed.' });
         }
-        
     } catch (error) {
-        console.error('Processing error:', error);
+        console.error('Server Error:', error);
         res.status(500).send({ error: error.message });
     }
-});
-
-app.listen(port, () => {
-    console.log(`PDF Worker running on port ${port}`);
 });
 
 async function generatePDFFromHTML(html) {
     const browser = await puppeteer.launch({ 
         headless: "new",
-        
-        args: [
-            '--no-sandbox', 
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage', // Helps prevent 'Out of Memory' crashes
-            '--single-process' // Added for better stability in small containers
-        ] 
+        executablePath: '/usr/bin/google-chrome-stable', 
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] 
     });
-    
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
-    
-    const pdfBuffer = await page.pdf({ 
-        format: 'A4', 
-        printBackground: true 
-    });
-
+    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
     await browser.close();
     return pdfBuffer;
 }
 
 async function uploadPDFToAirtable(pdfBuffer, recordId) {
-    const fileName = `Report_${recordId}_${Date.now()}.pdf`;
+    const fileName = `Report_${recordId}.pdf`;
     const publicDir = path.join(__dirname, 'public');
-
-    // 1. Ensure public directory exists
-    if (!fs.existsSync(publicDir)) {
-        fs.mkdirSync(publicDir);
-    }
-
-    const filePath = path.join(publicDir, fileName);
     
-    // 2. Write the file to disk
+    if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
+    const filePath = path.join(publicDir, fileName);
     fs.writeFileSync(filePath, pdfBuffer);
 
-    // 3. Construct the clean URL
-    const base = process.env.PUBLIC_BASE_URL.replace(/\/$/, ""); 
+    const base = PUBLIC_BASE_URL.replace(/\/$/, ""); 
     const publicUrl = `${base}/public/${fileName}`;
-    
-    console.log(`File available for Airtable fetch at: ${publicUrl}`);
 
-    // 4. Update Airtable
     const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
 
     const response = await fetch(url, {
@@ -107,24 +79,21 @@ async function uploadPDFToAirtable(pdfBuffer, recordId) {
             records: [{
                 id: recordId,
                 fields: {
-                    [ATTACHMENT_FIELD]: [{ url: publicUrl }]
+                    [ATTACHMENT_FIELD]: [{ 
+                        url: publicUrl,
+                        filename: fileName // CRITICAL FIX: Tells Airtable (and Softr) the real name
+                    }]
                 }
             }]
         })
     });
 
-    // --- ADDED: CLEANUP FUNCTION ---
-    // Wait 60 seconds, then delete the file to save space
+    // Auto-cleanup after 60 seconds
     setTimeout(() => {
-        fs.unlink(filePath, (err) => {
-            if (err) {
-                console.error(`Cleanup Error for ${fileName}:`, err);
-            } else {
-                console.log(`Cleanup Success: Deleted temporary file ${fileName}`);
-            }
-        });
-    }, 60000); // 60,000ms = 60 seconds
-    // -------------------------------
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }, 60000);
 
     return response.ok;
 }
+
+app.listen(port, () => console.log(`Worker running on port ${port}`));
