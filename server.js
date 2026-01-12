@@ -87,9 +87,14 @@ async function uploadPDFToAirtable(pdfBuffer, recordId) {
         })
     });
 
-    // Auto-cleanup after 60 seconds
-    setTimeout(() => {
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    // Use the Promise-based version (cleaner than callbacks)
+    setTimeout(async () => {
+        try {
+            await fs.promises.unlink(filePath);
+            console.log(`Cleanup Success: Deleted ${fileName}`);
+        } catch (err) {
+            console.error(`Cleanup Error for ${fileName}:`, err);
+        }
     }, 60000);
 
     return response.ok;
