@@ -21,14 +21,14 @@ app.post('/generate-pdf', async (req, res) => {
         return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const { htmlContent, recordId } = req.body;
-    if (!htmlContent || !recordId) {
-        return res.status(400).json({ error: 'Missing required fields: htmlContent and recordId' });
+    const { htmlContent, recordId, location } = req.body;
+    if (!htmlContent || !recordId || !location) {
+        return res.status(400).json({ error: 'Missing required fields: htmlContent, recordId, and location' });
     }
 
     try {
         const pdfBuffer = await generatePDFFromHTML(htmlContent);
-        const success = await uploadPDFToAirtable(pdfBuffer, recordId);
+        const success = await uploadPDFToAirtable(pdfBuffer, recordId, location);
         
         if (success) {
             res.status(200).json({ message: 'PDF generated and attached successfully.' });
@@ -66,8 +66,18 @@ async function generatePDFFromHTML(html) {
     }
 }
 
-async function uploadPDFToAirtable(pdfBuffer, recordId) {
-    const fileName = `Report_${recordId}.pdf`;
+function generateFileName(recordId, location) {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const dateStr = `${year}${month}${day}`;
+    
+    return `Report-${dateStr}-${location}-${recordId}.pdf`;
+}
+
+async function uploadPDFToAirtable(pdfBuffer, recordId, location) {
+    const fileName = generateFileName(recordId, location);
     const publicDir = path.join(__dirname, 'public');
     const filePath = path.join(publicDir, fileName);
 
