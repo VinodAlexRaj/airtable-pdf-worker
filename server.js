@@ -66,18 +66,19 @@ async function generatePDFFromHTML(html) {
     }
 }
 
-function generateFileName(recordId, location) {
+function generateFileName(location) {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const day = String(now.getDate()).padStart(2, '0');
     const dateStr = `${year}${month}${day}`;
+    const timestamp = Date.now();
     
-    return `Report-${dateStr}-${location}-${recordId}.pdf`;
+    return `Report-${dateStr}-${location}-${timestamp}.pdf`;
 }
 
 async function uploadPDFToAirtable(pdfBuffer, recordId, location) {
-    const fileName = generateFileName(recordId, location);
+    const fileName = generateFileName(location);
     const publicDir = path.join(__dirname, 'public');
     const filePath = path.join(publicDir, fileName);
 
