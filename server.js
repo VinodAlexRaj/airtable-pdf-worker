@@ -132,9 +132,7 @@ function generateFileName(location) {
     const dateStr = `${year}${month}${day}`;
     const timestamp = Date.now();
     
-    // Sanitize location string
-    const safeName = location.replace(/[^a-zA-Z0-9-_]/g, '');
-    return `Report-${dateStr}-${safeName}-${timestamp}.pdf`;
+    return `Report-${dateStr}-${location}-${timestamp}.pdf`;
 }
 
 async function uploadPDFToAirtable(pdfBuffer, recordId, location) {
