@@ -20,6 +20,15 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 let browserInstance = null;
 
 async function getBrowser() {
+    if (browserInstance) {
+        try {
+            // Check if browser is still alive
+            await browserInstance.version();
+        } catch {
+            console.log('Browser crashed, restarting...');
+            browserInstance = null;
+        }
+    }
     if (!browserInstance) {
         browserInstance = await puppeteer.launch({ 
             headless: "new",
@@ -28,7 +37,6 @@ async function getBrowser() {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--single-process', // Use with caution - can improve performance on constrained systems
                 '--no-first-run',
                 '--no-default-browser-check'
             ],
@@ -79,28 +87,24 @@ app.post('/generate-pdf', async (req, res) => {
     }
 });
 
-async function generatePDFFromHTML(html) {
+async function generatePDFFromHTML(html, retries = 1) {
     let page = null;
     try {
         const browser = await getBrowser();
         page = await browser.newPage();
         
-        // Set viewport and other options for faster rendering
         await page.setViewport({ width: 1200, height: 1600 });
         
-        // Set content with a shorter timeout for complex pages
         await page.setContent(html, { 
-            waitUntil: 'networkidle2',
+            waitUntil: 'domcontentloaded',
             timeout: 30000
         });
 
-        // Remove external font loading to speed up rendering
         await page.evaluate(() => {
             const links = document.querySelectorAll('link[href*="googleapis"]');
             links.forEach(link => link.remove());
         });
 
-        // Generate PDF with optimized settings
         const pdfBuffer = await page.pdf({ 
             format: 'A4',
             printBackground: true,
@@ -111,9 +115,19 @@ async function generatePDFFromHTML(html) {
         return pdfBuffer;
     } catch (error) {
         console.error('Puppeteer error:', error.message);
+
+        if (retries > 0 && (
+            error.message.includes('detached') ||
+            error.message.includes('Connection closed') ||
+            error.message.includes('Target closed')
+        )) {
+            console.log(`Retrying PDF generation... (${retries} attempt(s) left)`);
+            browserInstance = null; // Force fresh browser on retry
+            return generatePDFFromHTML(html, retries - 1);
+        }
+
         throw new Error(`PDF generation failed: ${error.message}`);
     } finally {
-        // Close page but keep browser alive for reuse
         if (page) {
             try {
                 await page.close();
