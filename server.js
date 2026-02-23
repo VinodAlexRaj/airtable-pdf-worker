@@ -59,11 +59,10 @@ app.post('/generate-pdf', async (req, res) => {
 
     let timeoutId;
     try {
-        // Set a timeout for the entire operation (45 seconds to stay under DigitalOcean's 60s limit)
         const timeoutPromise = new Promise((_, reject) => {
             timeoutId = setTimeout(() => {
-                reject(new Error('PDF generation timeout: exceeded 45 seconds'));
-            }, 45000);
+                reject(new Error('PDF generation timeout: exceeded 90 seconds'));
+            }, 90000); // Raise from 45s to 90s
         });
 
         const generatePromise = (async () => {
@@ -92,10 +91,10 @@ async function generatePDFFromHTML(html, retries = 1) {
     try {
         const browser = await getBrowser();
         page = await browser.newPage();
-        
+
         await page.setViewport({ width: 1200, height: 1600 });
 
-        // Block Google Fonts BEFORE loading content so it never fetches them
+        // Block fonts to avoid unnecessary network wait
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             const url = req.url();
@@ -105,22 +104,10 @@ async function generatePDFFromHTML(html, retries = 1) {
                 req.continue();
             }
         });
-        
-        await page.setContent(html, { 
-            waitUntil: 'networkidle2', // Wait for images to load, but tolerates 2 idle connections
-            timeout: 30000
-        });
 
-        // Extra wait for any lazy-rendered images
-        await page.evaluate(() => {
-            return Promise.all(
-                Array.from(document.images)
-                    .filter(img => !img.complete)
-                    .map(img => new Promise((resolve) => {
-                        img.onload = resolve;
-                        img.onerror = resolve; // resolve even on error so we don't hang
-                    }))
-            );
+        await page.setContent(html, { 
+            waitUntil: 'networkidle0', // Full wait — ensures all 13 R2 images load
+            timeout: 60000            // Give it more room: 60s just for this step
         });
 
         const pdfBuffer = await page.pdf({ 
