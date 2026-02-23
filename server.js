@@ -262,14 +262,26 @@ async function cleanupFile(filePath, fileName) {
     }
 }
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-    console.log('SIGTERM received, closing browser...');
-    if (browserInstance) {
-        await browserInstance.close();
-    }
-    process.exit(0);
+['SIGTERM', 'SIGINT', 'SIGKILL', 'SIGHUP', 'SIGABRT'].forEach(signal => {
+    process.on(signal, () => {
+        console.error(`Process received signal: ${signal}`);
+        process.exit(128);
+    });
 });
+
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err.message, err.stack);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled Rejection:', reason);
+});
+
+setInterval(() => {
+    const mem = process.memoryUsage();
+    console.log(`Memory - RSS: ${Math.round(mem.rss / 1024 / 1024)}MB, Heap: ${Math.round(mem.heapUsed / 1024 / 1024)}MB`);
+}, 10000); // Every 10 seconds
 
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
