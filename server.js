@@ -278,11 +278,6 @@ process.on('unhandledRejection', (reason) => {
     console.error('Unhandled Rejection:', reason);
 });
 
-setInterval(() => {
-    const mem = process.memoryUsage();
-    console.log(`Memory - RSS: ${Math.round(mem.rss / 1024 / 1024)}MB, Heap: ${Math.round(mem.heapUsed / 1024 / 1024)}MB`);
-}, 10000); // Every 10 seconds
-
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
     console.log(`Public base URL: ${PUBLIC_BASE_URL}`);
