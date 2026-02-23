@@ -74,21 +74,31 @@ app.post('/generate-pdf', async (req, res) => {
 });
 
 async function inlineImages(html) {
-    const MAX_DIMENSION = 1200;      // Max width or height in pixels
-    const MAX_SIZE_BYTES = 5 * 1024 * 1024; // Skip entirely if over 5MB even after resize attempt
+    const FULL_QUALITY_LIMIT = 6;     // First N images get full quality
+    const MAX_DIMENSION = 1200;       // Max px for downscaled images
+    const JPEG_QUALITY_FULL = 100;    // Quality for images within limit
+    const JPEG_QUALITY_REDUCED = 75;  // Quality for images beyond limit
+    const MAX_SIZE_BYTES = 5 * 1024 * 1024;
+
+    // Extract and deduplicate all image URLs
     const imageUrls = [];
     const regex = /<img[^>]+src="(https?:\/\/[^"]+)"/g;
     let match;
 
     while ((match = regex.exec(html)) !== null) {
         if (!imageUrls.includes(match[1])) {
-            imageUrls.push(match[1]); // Deduplicate
+            imageUrls.push(match[1]);
         }
     }
 
-    console.log(`Inlining ${imageUrls.length} images...`);
+    const total = imageUrls.length;
+    console.log(`Found ${total} images. Full quality: first ${Math.min(FULL_QUALITY_LIMIT, total)}, downscaled: ${Math.max(0, total - FULL_QUALITY_LIMIT)}`);
 
-    await Promise.all(imageUrls.map(async (url) => {
+    // Process in order so index is meaningful (full vs reduced quality)
+    await Promise.all(imageUrls.map(async (url, index) => {
+        const isFullQuality = index < FULL_QUALITY_LIMIT;
+        const label = isFullQuality ? `[FULL #${index + 1}]` : `[REDUCED #${index + 1}]`;
+
         try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 15000);
@@ -97,7 +107,7 @@ async function inlineImages(html) {
             clearTimeout(timeoutId);
 
             if (!response.ok) {
-                console.warn(`Skipping image (fetch failed ${response.status}): ${url}`);
+                console.warn(`${label} Skipping (fetch failed ${response.status}): ${url}`);
                 return;
             }
 
@@ -107,42 +117,49 @@ async function inlineImages(html) {
             let mimeType = 'image/jpeg';
 
             try {
-                // Get image metadata first
                 const image = sharp(buffer);
                 const metadata = await image.metadata();
 
-                const needsResize = metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION;
+                console.log(`${label} ${metadata.width}x${metadata.height} (${Math.round(buffer.byteLength / 1024)}KB): ${url}`);
 
-                if (needsResize) {
-                    console.log(`Resizing image ${metadata.width}x${metadata.height} → max ${MAX_DIMENSION}px: ${url}`);
-                    finalBuffer = await image
-                        .resize(MAX_DIMENSION, MAX_DIMENSION, {
-                            fit: 'inside',       // Maintain aspect ratio
-                            withoutEnlargement: true
-                        })
-                        .jpeg({ quality: 80 })   // Convert to JPEG to save memory
-                        .toBuffer();
-                    mimeType = 'image/jpeg';
-                } else {
-                    // Still convert to JPEG for memory consistency unless it's PNG with transparency
+                if (isFullQuality) {
+                    // Full quality — only convert format, no resize
                     if (metadata.format !== 'png' || !metadata.hasAlpha) {
                         finalBuffer = await image
-                            .jpeg({ quality: 85 })
+                            .jpeg({ quality: JPEG_QUALITY_FULL })
                             .toBuffer();
                         mimeType = 'image/jpeg';
                     } else {
-                        finalBuffer = buffer;
+                        finalBuffer = buffer; // Keep PNG if it has transparency
                         mimeType = 'image/png';
                     }
+                } else {
+                    // Reduced quality — resize if needed + compress
+                    const needsResize = metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION;
+                    let pipeline = image;
+
+                    if (needsResize) {
+                        pipeline = pipeline.resize(MAX_DIMENSION, MAX_DIMENSION, {
+                            fit: 'inside',
+                            withoutEnlargement: true
+                        });
+                    }
+
+                    finalBuffer = await pipeline
+                        .jpeg({ quality: JPEG_QUALITY_REDUCED })
+                        .toBuffer();
+                    mimeType = 'image/jpeg';
+
+                    console.log(`${label} Processed → ${Math.round(finalBuffer.byteLength / 1024)}KB`);
                 }
 
                 if (finalBuffer.byteLength > MAX_SIZE_BYTES) {
-                    console.warn(`Skipping image even after resize (${Math.round(finalBuffer.byteLength / 1024)}KB): ${url}`);
-                    return; // Leave original URL in HTML
+                    console.warn(`${label} Still too large after processing (${Math.round(finalBuffer.byteLength / 1024)}KB), leaving original URL`);
+                    return;
                 }
 
             } catch (sharpErr) {
-                console.warn(`Sharp processing failed, using original: ${sharpErr.message}`);
+                console.warn(`${label} Sharp failed, using original buffer: ${sharpErr.message}`);
                 finalBuffer = buffer;
                 mimeType = response.headers.get('content-type') || 'image/jpeg';
             }
@@ -151,11 +168,8 @@ async function inlineImages(html) {
             const dataUrl = `data:${mimeType};base64,${base64}`;
             html = html.replaceAll(url, dataUrl);
 
-            console.log(`Inlined image (${Math.round(finalBuffer.byteLength / 1024)}KB): ${url}`);
-
         } catch (err) {
-            console.warn(`Failed to inline image, leaving original URL: ${url} — ${err.message}`);
-            // Original URL stays in HTML — Puppeteer will try to fetch it directly
+            console.warn(`${label} Failed to inline, leaving original URL: ${url} — ${err.message}`);
         }
     }));
 
