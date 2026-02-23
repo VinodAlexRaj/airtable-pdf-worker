@@ -74,13 +74,14 @@ app.post('/generate-pdf', async (req, res) => {
 });
 
 async function inlineImages(html) {
-    const MAX_DIMENSION_FEW = 1600;    // ≤ 6 images: higher quality
-    const MAX_DIMENSION_MANY = 1200;   // 7–12 images: balanced
-    const MAX_DIMENSION_LOTS = 800;    // 13+ images: aggressive downscale
+    const MAX_DIMENSION_FEW = 1600;
+    const MAX_DIMENSION_MANY = 1200;
+    const MAX_DIMENSION_LOTS = 800;
     const QUALITY_FEW = 90;
     const QUALITY_MANY = 80;
     const QUALITY_LOTS = 70;
-    const MAX_FINAL_SIZE_BYTES = 5 * 1024 * 1024; // Skip if still >5MB after resize
+    const MAX_FINAL_SIZE_BYTES = 5 * 1024 * 1024;
+    const BATCH_SIZE = 3;
 
     // Step 1: Extract unique URLs
     const imageUrls = [];
@@ -92,112 +93,125 @@ async function inlineImages(html) {
         }
     }
 
-    console.log(`Found ${imageUrls.length} unique image(s) in HTML`);
+    const total = imageUrls.length;
+    console.log(`Found ${total} unique image(s) in HTML`);
 
-    // Step 2: Pre-fetch all images in parallel and measure total size
-    console.log('Pre-checking image sizes...');
-    const imageDataMap = new Map(); // url -> Buffer
+    // Step 2: Quick HEAD check to get total size without downloading everything
+    console.log('Pre-checking image sizes via HEAD requests...');
     let totalBytes = 0;
+    let headSuccessCount = 0;
 
     await Promise.all(imageUrls.map(async (url) => {
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-            const response = await fetch(url, { signal: controller.signal });
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            const response = await fetch(url, { method: 'HEAD', signal: controller.signal });
             clearTimeout(timeoutId);
 
-            if (!response.ok) {
-                console.warn(`Skipping image (fetch failed ${response.status}): ${url}`);
-                return;
+            const contentLength = response.headers.get('content-length');
+            if (contentLength) {
+                totalBytes += parseInt(contentLength);
+                headSuccessCount++;
             }
-
-            const buffer = Buffer.from(await response.arrayBuffer());
-            imageDataMap.set(url, buffer);
-            totalBytes += buffer.byteLength;
-
-        } catch (err) {
-            console.warn(`Failed to fetch image, leaving original URL: ${url} — ${err.message}`);
+        } catch {
+            // HEAD not supported, skip — we'll estimate below
         }
     }));
 
-    const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
-    const fetchedCount = imageDataMap.size;
-    console.log(`Successfully fetched ${fetchedCount}/${imageUrls.length} image(s) — Total size: ${totalMB}MB`);
-
-    // Step 3: Decide strategy based on count and total size
-    let maxDimension, quality, strategy;
-
-    if (fetchedCount <= 6 && totalBytes < 20 * 1024 * 1024) {
-        maxDimension = MAX_DIMENSION_FEW;
-        quality = QUALITY_FEW;
-        strategy = 'high quality (≤6 images)';
-    } else if (fetchedCount <= 12 && totalBytes < 40 * 1024 * 1024) {
-        maxDimension = MAX_DIMENSION_MANY;
-        quality = QUALITY_MANY;
-        strategy = 'balanced (7–12 images)';
+    // If HEAD checks mostly failed, estimate based on typical camera image size
+    if (headSuccessCount < total / 2) {
+        totalBytes = total * 3 * 1024 * 1024; // Assume 3MB average
+        console.log(`HEAD checks unreliable, estimating total: ${(totalBytes / 1024 / 1024).toFixed(2)}MB`);
     } else {
-        maxDimension = MAX_DIMENSION_LOTS;
-        quality = QUALITY_LOTS;
-        strategy = 'aggressive (13+ images or large total size)';
+        console.log(`Estimated total size: ${(totalBytes / 1024 / 1024).toFixed(2)}MB from ${headSuccessCount}/${total} HEAD checks`);
     }
 
+    // Step 3: Decide strategy
+    let maxDimension, quality, strategy;
+    if (total <= 6 && totalBytes < 20 * 1024 * 1024) {
+        maxDimension = MAX_DIMENSION_FEW; quality = QUALITY_FEW;
+        strategy = 'high quality (≤6 images)';
+    } else if (total <= 12 && totalBytes < 40 * 1024 * 1024) {
+        maxDimension = MAX_DIMENSION_MANY; quality = QUALITY_MANY;
+        strategy = 'balanced (7–12 images)';
+    } else {
+        maxDimension = MAX_DIMENSION_LOTS; quality = QUALITY_LOTS;
+        strategy = 'aggressive (13+ images or large total size)';
+    }
     console.log(`Using strategy: ${strategy} — maxDimension: ${maxDimension}px, quality: ${quality}%`);
 
-    // Step 4: Process and inline each image
-    await Promise.all(imageUrls.map(async (url) => {
-        const buffer = imageDataMap.get(url);
-        if (!buffer) return; // Fetch failed earlier, leave original URL
+    // Step 4: Fetch, process, and inline in batches — never hold more than BATCH_SIZE images in memory
+    for (let i = 0; i < imageUrls.length; i += BATCH_SIZE) {
+        const batch = imageUrls.slice(i, i + BATCH_SIZE);
+        console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(total / BATCH_SIZE)}`);
 
-        try {
-            const image = sharp(buffer);
-            const metadata = await image.metadata();
+        await Promise.all(batch.map(async (url) => {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000);
+                const response = await fetch(url, { signal: controller.signal });
+                clearTimeout(timeoutId);
 
-            console.log(`Processing image ${metadata.width}x${metadata.height} (${Math.round(buffer.byteLength / 1024)}KB): ${url}`);
-
-            const needsResize = metadata.width > maxDimension || metadata.height > maxDimension;
-            let finalBuffer;
-            let mimeType = 'image/jpeg';
-
-            if (needsResize) {
-                finalBuffer = await image
-                    .resize(maxDimension, maxDimension, {
-                        fit: 'inside',
-                        withoutEnlargement: true
-                    })
-                    .jpeg({ quality })
-                    .toBuffer();
-            } else {
-                if (metadata.format !== 'png' || !metadata.hasAlpha) {
-                    finalBuffer = await image.jpeg({ quality }).toBuffer();
-                } else {
-                    finalBuffer = buffer;
-                    mimeType = 'image/png';
+                if (!response.ok) {
+                    console.warn(`Skipping image (fetch failed ${response.status}): ${url}`);
+                    return;
                 }
+
+                const buffer = Buffer.from(await response.arrayBuffer());
+                let finalBuffer;
+                let mimeType = 'image/jpeg';
+
+                try {
+                    const image = sharp(buffer);
+                    const metadata = await image.metadata();
+                    const needsResize = metadata.width > maxDimension || metadata.height > maxDimension;
+
+                    console.log(`Processing ${metadata.width}x${metadata.height} (${Math.round(buffer.byteLength / 1024)}KB): ${url}`);
+
+                    if (needsResize) {
+                        finalBuffer = await image
+                            .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
+                            .jpeg({ quality })
+                            .toBuffer();
+                    } else if (metadata.format !== 'png' || !metadata.hasAlpha) {
+                        finalBuffer = await image.jpeg({ quality }).toBuffer();
+                    } else {
+                        finalBuffer = buffer;
+                        mimeType = 'image/png';
+                    }
+
+                    if (finalBuffer.byteLength > MAX_FINAL_SIZE_BYTES) {
+                        console.warn(`Skipping — still too large after resize (${Math.round(finalBuffer.byteLength / 1024)}KB): ${url}`);
+                        return;
+                    }
+
+                } catch (sharpErr) {
+                    console.warn(`Sharp failed, using original: ${sharpErr.message}`);
+                    finalBuffer = buffer;
+                    mimeType = response.headers.get('content-type') || 'image/jpeg';
+                }
+
+                const base64 = finalBuffer.toString('base64');
+                const dataUrl = `data:${mimeType};base64,${base64}`;
+                html = html.replaceAll(url, dataUrl);
+                console.log(`Inlined → ${Math.round(finalBuffer.byteLength / 1024)}KB: ${url}`);
+
+            } catch (err) {
+                console.warn(`Failed to inline, leaving original URL: ${url} — ${err.message}`);
             }
+        }));
 
-            if (finalBuffer.byteLength > MAX_FINAL_SIZE_BYTES) {
-                console.warn(`Skipping image even after resize (${Math.round(finalBuffer.byteLength / 1024)}KB): ${url}`);
-                return; // Leave original URL
-            }
-
-            const base64 = finalBuffer.toString('base64');
-            const dataUrl = `data:${mimeType};base64,${base64}`;
-            html = html.replaceAll(url, dataUrl);
-
-            console.log(`Inlined image → ${Math.round(finalBuffer.byteLength / 1024)}KB: ${url}`);
-
-        } catch (sharpErr) {
-            console.warn(`Sharp processing failed, using original: ${sharpErr.message}`);
-            // Leave original URL in HTML
+        // Pause between batches to let GC free memory
+        if (i + BATCH_SIZE < imageUrls.length) {
+            await new Promise(resolve => setTimeout(resolve, 300));
         }
-    }));
+    }
 
     const finalCount = (html.match(/data:image\//g) || []).length;
-    console.log(`Inlining complete — ${finalCount}/${imageUrls.length} image(s) inlined`);
-
+    console.log(`Inlining complete — ${finalCount}/${total} image(s) inlined`);
     return html;
 }
+
 async function generatePDFFromHTML(html, retries = 1) {
     let page = null;
     try {
