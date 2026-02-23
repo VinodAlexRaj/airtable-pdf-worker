@@ -262,11 +262,17 @@ async function cleanupFile(filePath, fileName) {
     }
 }
 
-['SIGTERM', 'SIGINT', 'SIGKILL', 'SIGHUP', 'SIGABRT'].forEach(signal => {
-    process.on(signal, () => {
-        console.error(`Process received signal: ${signal}`);
-        process.exit(128);
-    });
+process.on('SIGTERM', async () => {
+    console.error('Process received signal: SIGTERM');
+    if (browserInstance) {
+        await browserInstance.close();
+    }
+    process.exit(0);
+});
+
+process.on('SIGINT', () => {
+    console.error('Process received signal: SIGINT');
+    process.exit(0);
 });
 
 process.on('uncaughtException', (err) => {
