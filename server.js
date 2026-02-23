@@ -57,34 +57,56 @@ app.post('/generate-pdf', async (req, res) => {
         return res.status(400).json({ error: 'Missing required fields: htmlContent, recordId, and location' });
     }
 
-    let timeoutId;
-    try {
-        const timeoutPromise = new Promise((_, reject) => {
-            timeoutId = setTimeout(() => {
-                reject(new Error('PDF generation timeout: exceeded 90 seconds'));
-            }, 90000); // Raise from 45s to 90s
-        });
+    // Respond immediately — don't await
+    res.status(202).json({ message: 'PDF generation started. It will be attached to the record shortly.' });
 
-        const generatePromise = (async () => {
+    // Process in background
+    (async () => {
+        try {
             const pdfBuffer = await generatePDFFromHTML(htmlContent);
-            const success = await uploadPDFToAirtable(pdfBuffer, recordId, location);
-            
-            if (success) {
-                return { status: 200, data: { message: 'PDF generated and attached successfully.' } };
-            } else {
-                return { status: 500, data: { error: 'Failed to upload PDF to Airtable.' } };
-            }
-        })();
-
-        const result = await Promise.race([generatePromise, timeoutPromise]);
-        clearTimeout(timeoutId);
-        res.status(result.status).json(result.data);
-    } catch (error) {
-        clearTimeout(timeoutId);
-        console.error('PDF generation error:', error.message);
-        res.status(500).json({ error: error.message || 'Internal server error' });
-    }
+            await uploadPDFToAirtable(pdfBuffer, recordId, location);
+            console.log(`PDF successfully attached to record ${recordId}`);
+        } catch (error) {
+            console.error(`Background PDF generation failed for record ${recordId}:`, error.message);
+        }
+    })();
 });
+
+async function inlineImages(html) {
+    const imageUrls = [];
+    const regex = /<img[^>]+src="(https?:\/\/[^"]+)"/g;
+    let match;
+    
+    while ((match = regex.exec(html)) !== null) {
+        imageUrls.push(match[1]);
+    }
+
+    console.log(`Inlining ${imageUrls.length} images...`);
+
+    await Promise.all(imageUrls.map(async (url) => {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s per image
+            
+            const response = await fetch(url, { signal: controller.signal });
+            clearTimeout(timeoutId);
+
+            if (!response.ok) throw new Error(`Failed to fetch image: ${url}`);
+            
+            const buffer = await response.arrayBuffer();
+            const base64 = Buffer.from(buffer).toString('base64');
+            const mimeType = response.headers.get('content-type') || 'image/jpeg';
+            const dataUrl = `data:${mimeType};base64,${base64}`;
+            
+            html = html.replaceAll(url, dataUrl);
+        } catch (err) {
+            console.error(`Failed to inline image ${url}:`, err.message);
+            // Leave original URL if fetch fails — don't break the whole PDF
+        }
+    }));
+
+    return html;
+}
 
 async function generatePDFFromHTML(html, retries = 1) {
     let page = null;
@@ -94,7 +116,9 @@ async function generatePDFFromHTML(html, retries = 1) {
 
         await page.setViewport({ width: 1200, height: 1600 });
 
-        // Block fonts to avoid unnecessary network wait
+        // Pre-fetch all images as base64 so Puppeteer doesn't need to fetch anything
+        html = await inlineImages(html);
+
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             const url = req.url();
@@ -106,8 +130,8 @@ async function generatePDFFromHTML(html, retries = 1) {
         });
 
         await page.setContent(html, { 
-            waitUntil: 'networkidle0', // Full wait — ensures all 13 R2 images load
-            timeout: 60000            // Give it more room: 60s just for this step
+            waitUntil: 'domcontentloaded', // Back to fast — no external images to wait for
+            timeout: 30000
         });
 
         const pdfBuffer = await page.pdf({ 
