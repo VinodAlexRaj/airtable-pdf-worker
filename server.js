@@ -94,15 +94,33 @@ async function generatePDFFromHTML(html, retries = 1) {
         page = await browser.newPage();
         
         await page.setViewport({ width: 1200, height: 1600 });
+
+        // Block Google Fonts BEFORE loading content so it never fetches them
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const url = req.url();
+            if (url.includes('fonts.googleapis.com') || url.includes('fonts.gstatic.com')) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
         
         await page.setContent(html, { 
-            waitUntil: 'domcontentloaded',
+            waitUntil: 'networkidle2', // Wait for images to load, but tolerates 2 idle connections
             timeout: 30000
         });
 
+        // Extra wait for any lazy-rendered images
         await page.evaluate(() => {
-            const links = document.querySelectorAll('link[href*="googleapis"]');
-            links.forEach(link => link.remove());
+            return Promise.all(
+                Array.from(document.images)
+                    .filter(img => !img.complete)
+                    .map(img => new Promise((resolve) => {
+                        img.onload = resolve;
+                        img.onerror = resolve; // resolve even on error so we don't hang
+                    }))
+            );
         });
 
         const pdfBuffer = await page.pdf({ 
@@ -122,7 +140,7 @@ async function generatePDFFromHTML(html, retries = 1) {
             error.message.includes('Target closed')
         )) {
             console.log(`Retrying PDF generation... (${retries} attempt(s) left)`);
-            browserInstance = null; // Force fresh browser on retry
+            browserInstance = null;
             return generatePDFFromHTML(html, retries - 1);
         }
 
