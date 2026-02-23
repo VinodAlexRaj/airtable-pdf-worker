@@ -74,13 +74,13 @@ app.post('/generate-pdf', async (req, res) => {
 });
 
 async function inlineImages(html) {
-    const FULL_QUALITY_LIMIT = 6;     // First N images get full quality
-    const MAX_DIMENSION = 1200;       // Max px for downscaled images
-    const JPEG_QUALITY_FULL = 100;    // Quality for images within limit
-    const JPEG_QUALITY_REDUCED = 75;  // Quality for images beyond limit
+    const FULL_QUALITY_LIMIT = 6;
+    const BATCH_SIZE = 3;             // Process 3 images at a time
+    const MAX_DIMENSION = 1200;
+    const JPEG_QUALITY_FULL = 100;
+    const JPEG_QUALITY_REDUCED = 75;
     const MAX_SIZE_BYTES = 5 * 1024 * 1024;
 
-    // Extract and deduplicate all image URLs
     const imageUrls = [];
     const regex = /<img[^>]+src="(https?:\/\/[^"]+)"/g;
     let match;
@@ -92,86 +92,95 @@ async function inlineImages(html) {
     }
 
     const total = imageUrls.length;
-    console.log(`Found ${total} images. Full quality: first ${Math.min(FULL_QUALITY_LIMIT, total)}, downscaled: ${Math.max(0, total - FULL_QUALITY_LIMIT)}`);
+    console.log(`Found ${total} images. Full quality: first ${Math.min(FULL_QUALITY_LIMIT, total)}, downscaled: ${Math.max(0, total - FULL_QUALITY_LIMIT)}, batch size: ${BATCH_SIZE}`);
 
-    // Process in order so index is meaningful (full vs reduced quality)
-    await Promise.all(imageUrls.map(async (url, index) => {
-        const isFullQuality = index < FULL_QUALITY_LIMIT;
-        const label = isFullQuality ? `[FULL #${index + 1}]` : `[REDUCED #${index + 1}]`;
+    // Process in batches to control memory usage
+    for (let i = 0; i < imageUrls.length; i += BATCH_SIZE) {
+        const batch = imageUrls.slice(i, i + BATCH_SIZE);
+        console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(total / BATCH_SIZE)} (images ${i + 1}–${Math.min(i + BATCH_SIZE, total)})`);
 
-        try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-            const response = await fetch(url, { signal: controller.signal });
-            clearTimeout(timeoutId);
-
-            if (!response.ok) {
-                console.warn(`${label} Skipping (fetch failed ${response.status}): ${url}`);
-                return;
-            }
-
-            const buffer = Buffer.from(await response.arrayBuffer());
-
-            let finalBuffer;
-            let mimeType = 'image/jpeg';
+        await Promise.all(batch.map(async (url) => {
+            const index = imageUrls.indexOf(url);
+            const isFullQuality = index < FULL_QUALITY_LIMIT;
+            const label = isFullQuality ? `[FULL #${index + 1}]` : `[REDUCED #${index + 1}]`;
 
             try {
-                const image = sharp(buffer);
-                const metadata = await image.metadata();
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-                console.log(`${label} ${metadata.width}x${metadata.height} (${Math.round(buffer.byteLength / 1024)}KB): ${url}`);
+                const response = await fetch(url, { signal: controller.signal });
+                clearTimeout(timeoutId);
 
-                if (isFullQuality) {
-                    // Full quality — only convert format, no resize
-                    if (metadata.format !== 'png' || !metadata.hasAlpha) {
-                        finalBuffer = await image
-                            .jpeg({ quality: JPEG_QUALITY_FULL })
-                            .toBuffer();
-                        mimeType = 'image/jpeg';
-                    } else {
-                        finalBuffer = buffer; // Keep PNG if it has transparency
-                        mimeType = 'image/png';
-                    }
-                } else {
-                    // Reduced quality — resize if needed + compress
-                    const needsResize = metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION;
-                    let pipeline = image;
-
-                    if (needsResize) {
-                        pipeline = pipeline.resize(MAX_DIMENSION, MAX_DIMENSION, {
-                            fit: 'inside',
-                            withoutEnlargement: true
-                        });
-                    }
-
-                    finalBuffer = await pipeline
-                        .jpeg({ quality: JPEG_QUALITY_REDUCED })
-                        .toBuffer();
-                    mimeType = 'image/jpeg';
-
-                    console.log(`${label} Processed → ${Math.round(finalBuffer.byteLength / 1024)}KB`);
-                }
-
-                if (finalBuffer.byteLength > MAX_SIZE_BYTES) {
-                    console.warn(`${label} Still too large after processing (${Math.round(finalBuffer.byteLength / 1024)}KB), leaving original URL`);
+                if (!response.ok) {
+                    console.warn(`${label} Skipping (fetch failed ${response.status}): ${url}`);
                     return;
                 }
 
-            } catch (sharpErr) {
-                console.warn(`${label} Sharp failed, using original buffer: ${sharpErr.message}`);
-                finalBuffer = buffer;
-                mimeType = response.headers.get('content-type') || 'image/jpeg';
+                const buffer = Buffer.from(await response.arrayBuffer());
+
+                let finalBuffer;
+                let mimeType = 'image/jpeg';
+
+                try {
+                    const image = sharp(buffer);
+                    const metadata = await image.metadata();
+
+                    console.log(`${label} ${metadata.width}x${metadata.height} (${Math.round(buffer.byteLength / 1024)}KB): ${url}`);
+
+                    if (isFullQuality) {
+                        if (metadata.format !== 'png' || !metadata.hasAlpha) {
+                            finalBuffer = await image
+                                .jpeg({ quality: JPEG_QUALITY_FULL })
+                                .toBuffer();
+                            mimeType = 'image/jpeg';
+                        } else {
+                            finalBuffer = buffer;
+                            mimeType = 'image/png';
+                        }
+                    } else {
+                        const needsResize = metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION;
+                        let pipeline = image;
+
+                        if (needsResize) {
+                            pipeline = pipeline.resize(MAX_DIMENSION, MAX_DIMENSION, {
+                                fit: 'inside',
+                                withoutEnlargement: true
+                            });
+                        }
+
+                        finalBuffer = await pipeline
+                            .jpeg({ quality: JPEG_QUALITY_REDUCED })
+                            .toBuffer();
+                        mimeType = 'image/jpeg';
+
+                        console.log(`${label} Processed → ${Math.round(finalBuffer.byteLength / 1024)}KB`);
+                    }
+
+                    if (finalBuffer.byteLength > MAX_SIZE_BYTES) {
+                        console.warn(`${label} Still too large (${Math.round(finalBuffer.byteLength / 1024)}KB), leaving original URL`);
+                        return;
+                    }
+
+                } catch (sharpErr) {
+                    console.warn(`${label} Sharp failed, using original: ${sharpErr.message}`);
+                    finalBuffer = buffer;
+                    mimeType = response.headers.get('content-type') || 'image/jpeg';
+                }
+
+                const base64 = finalBuffer.toString('base64');
+                const dataUrl = `data:${mimeType};base64,${base64}`;
+                html = html.replaceAll(url, dataUrl);
+
+            } catch (err) {
+                console.warn(`${label} Failed to inline, leaving original URL: ${url} — ${err.message}`);
             }
+        }));
 
-            const base64 = finalBuffer.toString('base64');
-            const dataUrl = `data:${mimeType};base64,${base64}`;
-            html = html.replaceAll(url, dataUrl);
-
-        } catch (err) {
-            console.warn(`${label} Failed to inline, leaving original URL: ${url} — ${err.message}`);
+        // Small pause between batches to let GC free memory
+        if (i + BATCH_SIZE < imageUrls.length) {
+            await new Promise(resolve => setTimeout(resolve, 200));
         }
-    }));
+    }
 
     return html;
 }
