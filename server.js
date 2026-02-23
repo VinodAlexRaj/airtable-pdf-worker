@@ -11,6 +11,7 @@ const ATTACHMENT_FIELD = 'Approval Attachment';
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
 const INTERNAL_AUTH_TOKEN = process.env.INTERNAL_AUTH_TOKEN;
 const CLEANUP_DELAY_MS = 60000; // 1 minute
+const sharp = require('sharp');
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb' }));
@@ -73,12 +74,16 @@ app.post('/generate-pdf', async (req, res) => {
 });
 
 async function inlineImages(html) {
+    const MAX_DIMENSION = 1200;      // Max width or height in pixels
+    const MAX_SIZE_BYTES = 5 * 1024 * 1024; // Skip entirely if over 5MB even after resize attempt
     const imageUrls = [];
     const regex = /<img[^>]+src="(https?:\/\/[^"]+)"/g;
     let match;
-    
+
     while ((match = regex.exec(html)) !== null) {
-        imageUrls.push(match[1]);
+        if (!imageUrls.includes(match[1])) {
+            imageUrls.push(match[1]); // Deduplicate
+        }
     }
 
     console.log(`Inlining ${imageUrls.length} images...`);
@@ -86,22 +91,71 @@ async function inlineImages(html) {
     await Promise.all(imageUrls.map(async (url) => {
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s per image
-            
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+
             const response = await fetch(url, { signal: controller.signal });
             clearTimeout(timeoutId);
 
-            if (!response.ok) throw new Error(`Failed to fetch image: ${url}`);
-            
-            const buffer = await response.arrayBuffer();
-            const base64 = Buffer.from(buffer).toString('base64');
-            const mimeType = response.headers.get('content-type') || 'image/jpeg';
+            if (!response.ok) {
+                console.warn(`Skipping image (fetch failed ${response.status}): ${url}`);
+                return;
+            }
+
+            const buffer = Buffer.from(await response.arrayBuffer());
+
+            let finalBuffer;
+            let mimeType = 'image/jpeg';
+
+            try {
+                // Get image metadata first
+                const image = sharp(buffer);
+                const metadata = await image.metadata();
+
+                const needsResize = metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION;
+
+                if (needsResize) {
+                    console.log(`Resizing image ${metadata.width}x${metadata.height} → max ${MAX_DIMENSION}px: ${url}`);
+                    finalBuffer = await image
+                        .resize(MAX_DIMENSION, MAX_DIMENSION, {
+                            fit: 'inside',       // Maintain aspect ratio
+                            withoutEnlargement: true
+                        })
+                        .jpeg({ quality: 80 })   // Convert to JPEG to save memory
+                        .toBuffer();
+                    mimeType = 'image/jpeg';
+                } else {
+                    // Still convert to JPEG for memory consistency unless it's PNG with transparency
+                    if (metadata.format !== 'png' || !metadata.hasAlpha) {
+                        finalBuffer = await image
+                            .jpeg({ quality: 85 })
+                            .toBuffer();
+                        mimeType = 'image/jpeg';
+                    } else {
+                        finalBuffer = buffer;
+                        mimeType = 'image/png';
+                    }
+                }
+
+                if (finalBuffer.byteLength > MAX_SIZE_BYTES) {
+                    console.warn(`Skipping image even after resize (${Math.round(finalBuffer.byteLength / 1024)}KB): ${url}`);
+                    return; // Leave original URL in HTML
+                }
+
+            } catch (sharpErr) {
+                console.warn(`Sharp processing failed, using original: ${sharpErr.message}`);
+                finalBuffer = buffer;
+                mimeType = response.headers.get('content-type') || 'image/jpeg';
+            }
+
+            const base64 = finalBuffer.toString('base64');
             const dataUrl = `data:${mimeType};base64,${base64}`;
-            
             html = html.replaceAll(url, dataUrl);
+
+            console.log(`Inlined image (${Math.round(finalBuffer.byteLength / 1024)}KB): ${url}`);
+
         } catch (err) {
-            console.error(`Failed to inline image ${url}:`, err.message);
-            // Leave original URL if fetch fails — don't break the whole PDF
+            console.warn(`Failed to inline image, leaving original URL: ${url} — ${err.message}`);
+            // Original URL stays in HTML — Puppeteer will try to fetch it directly
         }
     }));
 
