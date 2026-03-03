@@ -47,6 +47,33 @@ async function getBrowser() {
     return browserInstance;
 }
 
+// --- Request Queue ---
+let isProcessing = false;
+const jobQueue = [];
+
+async function processQueue() {
+    if (isProcessing || jobQueue.length === 0) return;
+    isProcessing = true;
+
+    const { htmlContent, recordId, location } = jobQueue.shift();
+    console.log(`Processing job for record ${recordId}. Queue remaining: ${jobQueue.length}`);
+
+    try {
+        const pdfBuffer = await generatePDFFromHTML(htmlContent);
+        await uploadPDFToAirtable(pdfBuffer, recordId, location);
+        console.log(`PDF successfully attached to record ${recordId}`);
+    } catch (error) {
+        console.error(`PDF generation failed for record ${recordId}:`, error.message);
+    } finally {
+        isProcessing = false;
+        // Process next job after a short cooldown to let GC free memory
+        if (jobQueue.length > 0) {
+            console.log(`Cooling down before next job... (${jobQueue.length} remaining)`);
+            setTimeout(processQueue, 2000); // 2 second gap between jobs
+        }
+    }
+}
+
 app.post('/generate-pdf', async (req, res) => {
     const secret = req.headers['x-auth-token'];
     if (secret !== INTERNAL_AUTH_TOKEN) {
@@ -58,19 +85,18 @@ app.post('/generate-pdf', async (req, res) => {
         return res.status(400).json({ error: 'Missing required fields: htmlContent, recordId, and location' });
     }
 
-    // Respond immediately — don't await
-    res.status(202).json({ message: 'PDF generation started. It will be attached to the record shortly.' });
+    // Add to queue
+    jobQueue.push({ htmlContent, recordId, location });
+    console.log(`Job queued for record ${recordId}. Queue length: ${jobQueue.length}`);
 
-    // Process in background
-    (async () => {
-        try {
-            const pdfBuffer = await generatePDFFromHTML(htmlContent);
-            await uploadPDFToAirtable(pdfBuffer, recordId, location);
-            console.log(`PDF successfully attached to record ${recordId}`);
-        } catch (error) {
-            console.error(`Background PDF generation failed for record ${recordId}:`, error.message);
-        }
-    })();
+    // Respond immediately
+    res.status(202).json({ 
+        message: 'PDF generation queued. It will be attached to the record shortly.',
+        queuePosition: jobQueue.length
+    });
+
+    // Trigger queue processing (no-op if already processing)
+    processQueue();
 });
 
 async function inlineImages(html) {
