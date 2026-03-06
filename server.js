@@ -19,18 +19,27 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 
 // Browser pool for faster PDF generation
 let browserInstance = null;
+let browserIdleTimer = null;
+const BROWSER_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 async function getBrowser() {
+    // Reset idle timer every time browser is requested
+    if (browserIdleTimer) {
+        clearTimeout(browserIdleTimer);
+        browserIdleTimer = null;
+    }
+
     if (browserInstance) {
         try {
-            // Check if browser is still alive
             await browserInstance.version();
         } catch {
             console.log('Browser crashed, restarting...');
             browserInstance = null;
         }
     }
+
     if (!browserInstance) {
+        console.log('Launching new browser instance...');
         browserInstance = await puppeteer.launch({ 
             headless: "new",
             args: [
@@ -43,8 +52,34 @@ async function getBrowser() {
             ],
             timeout: 30000
         });
+        console.log('Browser instance launched.');
     }
+
     return browserInstance;
+}
+
+function scheduleIdleClose() {
+    if (browserIdleTimer) {
+        clearTimeout(browserIdleTimer);
+    }
+
+    browserIdleTimer = setTimeout(async () => {
+        if (browserInstance && jobQueue.length === 0 && !isProcessing) {
+            console.log('Browser idle for 5 minutes with no queued jobs — closing to free memory.');
+            try {
+                await browserInstance.close();
+                console.log('Browser closed. Memory should return to baseline.');
+            } catch (err) {
+                console.error('Error closing idle browser:', err.message);
+            } finally {
+                browserInstance = null;
+                browserIdleTimer = null;
+            }
+        } else if (jobQueue.length > 0 || isProcessing) {
+            console.log('Idle timer fired but jobs still pending — rescheduling close.');
+            scheduleIdleClose(); // Reschedule if queue got new jobs
+        }
+    }, BROWSER_IDLE_TIMEOUT_MS);
 }
 
 // --- Request Queue ---
@@ -66,10 +101,14 @@ async function processQueue() {
         console.error(`PDF generation failed for record ${recordId}:`, error.message);
     } finally {
         isProcessing = false;
-        // Process next job after a short cooldown to let GC free memory
+
         if (jobQueue.length > 0) {
             console.log(`Cooling down before next job... (${jobQueue.length} remaining)`);
-            setTimeout(processQueue, 2000); // 2 second gap between jobs
+            setTimeout(processQueue, 2000);
+        } else {
+            // Queue empty — start idle countdown
+            console.log('Queue empty. Starting browser idle timer.');
+            scheduleIdleClose();
         }
     }
 }
@@ -394,6 +433,9 @@ async function cleanupFile(filePath, fileName) {
 
 process.on('SIGTERM', async () => {
     console.error('Process received signal: SIGTERM');
+    if (browserIdleTimer) {
+        clearTimeout(browserIdleTimer);
+    }
     if (browserInstance) {
         await browserInstance.close();
     }
