@@ -6,10 +6,11 @@ const app = express();
 const port = process.env.PORT || 3000;
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
-const AIRTABLE_TABLE_NAME = 'Patrolling Report'; 
+const AIRTABLE_TABLE_NAME = 'Patrolling Report';
 const ATTACHMENT_FIELD = 'Approval Attachment';
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
 const INTERNAL_AUTH_TOKEN = process.env.INTERNAL_AUTH_TOKEN;
+const REPORT_PDF_AUTH_TOKEN = process.env.REPORT_PDF_AUTH_TOKEN;
 const CLEANUP_DELAY_MS = 60000; // 1 minute
 const sharp = require('sharp');
 
@@ -40,7 +41,7 @@ async function getBrowser() {
 
     if (!browserInstance) {
         console.log('Launching new browser instance...');
-        browserInstance = await puppeteer.launch({ 
+        browserInstance = await puppeteer.launch({
             headless: "new",
             args: [
                 '--no-sandbox',
@@ -129,7 +130,7 @@ app.post('/generate-pdf', async (req, res) => {
     console.log(`Job queued for record ${recordId}. Queue length: ${jobQueue.length}`);
 
     // Respond immediately
-    res.status(202).json({ 
+    res.status(202).json({
         message: 'PDF generation queued. It will be attached to the record shortly.',
         queuePosition: jobQueue.length
     });
@@ -298,18 +299,18 @@ async function generatePDFFromHTML(html, retries = 1) {
             }
         });
 
-        await page.setContent(html, { 
+        await page.setContent(html, {
             waitUntil: 'domcontentloaded', // Back to fast — no external images to wait for
             timeout: 30000
         });
 
-        const pdfBuffer = await page.pdf({ 
+        const pdfBuffer = await page.pdf({
             format: 'A4',
             printBackground: true,
             margin: { top: 20, bottom: 20, left: 20, right: 20 },
             timeout: 30000
         });
-        
+
         return pdfBuffer;
     } catch (error) {
         console.error('Puppeteer error:', error.message);
@@ -343,7 +344,7 @@ function generateFileName(location) {
     const day = String(now.getDate()).padStart(2, '0');
     const dateStr = `${year}${month}${day}`;
     const timestamp = Date.now();
-    
+
     return `Report-${dateStr}-${location}-${timestamp}.pdf`;
 }
 
@@ -363,12 +364,12 @@ async function uploadPDFToAirtable(pdfBuffer, recordId, location) {
         console.log(`File saved: ${fileName}`);
 
         // Construct public URL
-        const base = PUBLIC_BASE_URL.replace(/\/$/, ""); 
+        const base = PUBLIC_BASE_URL.replace(/\/$/, "");
         const publicUrl = `${base}/public/${fileName}`;
 
         // Upload to Airtable with timeout
         const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
-        
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout for Airtable
 
@@ -382,7 +383,7 @@ async function uploadPDFToAirtable(pdfBuffer, recordId, location) {
                 records: [{
                     id: recordId,
                     fields: {
-                        [ATTACHMENT_FIELD]: [{ 
+                        [ATTACHMENT_FIELD]: [{
                             url: publicUrl,
                             filename: fileName
                         }]
@@ -454,6 +455,19 @@ process.on('uncaughtException', (err) => {
 
 process.on('unhandledRejection', (reason) => {
     console.error('Unhandled Rejection:', reason);
+});
+
+const registerWeeklyReportPdfExtension =
+    require('./weekly-report-pdf-extension');
+
+registerWeeklyReportPdfExtension({
+    app,
+    getBrowser,
+    scheduleIdleClose,
+    publicBaseUrl: PUBLIC_BASE_URL,
+    reportPdfAuthToken: REPORT_PDF_AUTH_TOKEN,
+    airtableApiKey: AIRTABLE_API_KEY,
+    airtableBaseId: AIRTABLE_BASE_ID,
 });
 
 app.listen(port, () => {
