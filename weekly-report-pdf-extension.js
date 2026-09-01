@@ -177,7 +177,7 @@ async function generateWeeklyPdf({ htmlContent, getBrowser }, retries = 1) {
 
         return await page.pdf({
             format: "A4",
-            landscape: true,
+            landscape: false,
             printBackground: true,
             displayHeaderFooter: true,
             headerTemplate: "<div></div>",
@@ -381,8 +381,8 @@ function withDeadline(promise, timeoutMs, message) {
 
 function buildAttachmentFilename(periodStart, periodEnd) {
     return (
-        `Weekly KPI Summary ( ${formatDate(periodStart)} ~ ` +
-        `${formatDate(periodEnd)} ).pdf`
+        `Weekly KPI Summary ( ${formatFilenameDate(periodStart)} ~ ` +
+        `${formatFilenameDate(periodEnd)} ).pdf`
     );
 }
 
@@ -441,7 +441,7 @@ function isIsoDate(value) {
     );
 }
 
-function formatDate(value) {
+function formatFilenameDate(value) {
     const [year, month, day] = value.split("-");
-    return `${day}/${month}/${year}`;
+    return `${day}-${month}-${year}`;
 }

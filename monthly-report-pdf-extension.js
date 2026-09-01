@@ -394,8 +394,8 @@ function withDeadline(promise, timeoutMs, message) {
 
 function buildAttachmentFilename(periodStart, periodEnd) {
     return (
-        `Monthly KPI Review ( ${formatDate(periodStart)} ~ ` +
-        `${formatDate(periodEnd)} ).pdf`
+        `Monthly KPI Review ( ${formatFilenameDate(periodStart)} ~ ` +
+        `${formatFilenameDate(periodEnd)} ).pdf`
     );
 }
 
@@ -470,7 +470,7 @@ function getWeekday(value) {
     return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
 }
 
-function formatDate(value) {
+function formatFilenameDate(value) {
     const [year, month, day] = value.split("-");
-    return `${day}/${month}/${year}`;
+    return `${day}-${month}-${year}`;
 }
