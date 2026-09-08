@@ -509,10 +509,10 @@ registerBriefingNotePdfExtension({
     app,
     getBrowser,
     scheduleIdleClose,
-    publicBaseUrl,
-    reportPdfAuthToken,
-    airtableApiKey,
-    airtableBaseId,
+    publicBaseUrl: PUBLIC_BASE_URL,
+    reportPdfAuthToken: REPORT_PDF_AUTH_TOKEN,
+    airtableApiKey: AIRTABLE_API_KEY,   
+    airtableBaseId: AIRTABLE_BASE_ID,
 });
 
 
