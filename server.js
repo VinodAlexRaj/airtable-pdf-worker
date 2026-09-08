@@ -502,7 +502,23 @@ registerSiteAssessmentPdfExtension({
     airtableBaseId: AIRTABLE_BASE_ID,
 });
 
+const registerBriefingNotePdfExtension =
+    require('./briefing-note-pdf-extension');
+
+registerBriefingNotePdfExtension({
+    app,
+    getBrowser,
+    scheduleIdleClose,
+    publicBaseUrl,
+    reportPdfAuthToken,
+    airtableApiKey,
+    airtableBaseId,
+});
+
+
+
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
     console.log(`Public base URL: ${PUBLIC_BASE_URL}`);
 });
+
