@@ -7,8 +7,8 @@ POST /generate-site-assessment-pdf
 - Input: htmlContent, recordId, assessmentId
 - Queues the job and returns HTTP 202 immediately
 - Background job inlines/resizes images before Puppeteer rendering
-- Refuses to overwrite Site Assessment PDF
-- Writes attachment to Airtable Site Assessment.Site Assessment PDF
+- Refuses to overwrite the existing Site Assessment PDF attachment
+- Writes the PDF attachment to Airtable Site Assessment Report.
 */
 
 const fs = require("fs");
@@ -17,7 +17,7 @@ const sharp = require("sharp");
 
 const CONFIG = {
     route: "/generate-site-assessment-pdf",
-    airtableTableName: "Site Assessment",
+    siteAssessmentReportTableName: "Site Assessment Report",
     attachmentField: "Site Assessment PDF",
     cleanupDelayMs: 60000,
     airtableRequestTimeoutMs: 15000,
@@ -446,7 +446,7 @@ async function assertAttachmentFieldEmpty({
 async function fetchAirtableRecord(recordId, airtableApiKey, airtableBaseId) {
     const url =
         `https://api.airtable.com/v0/${airtableBaseId}/` +
-        `${encodeURIComponent(CONFIG.airtableTableName)}/${recordId}`;
+        `${encodeURIComponent(CONFIG.siteAssessmentReportTableName)}/${recordId}`;
     const response = await fetchWithTimeout(url, {
         headers: { Authorization: `Bearer ${airtableApiKey}` },
     });
@@ -488,7 +488,7 @@ async function attachPdfToAirtable({
             encodeURIComponent(tempFilename);
         const airtableUrl =
             `https://api.airtable.com/v0/${airtableBaseId}/` +
-            encodeURIComponent(CONFIG.airtableTableName);
+            encodeURIComponent(CONFIG.siteAssessmentReportTableName);
 
         const response = await fetchWithTimeout(airtableUrl, {
             method: "PATCH",
@@ -579,7 +579,7 @@ function buildAttachmentFilename(assessmentId) {
         .trim()
         .replace(/[\\/:*?"<>|]+/g, "-")
         .replace(/\s+/g, " ");
-    return `${safe || "Site Assessment"}.pdf`;
+    return `${safe || "Site Assessment Report"}.pdf`;
 }
 
 function scheduleCleanup(filePath, filename) {
