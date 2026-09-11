@@ -385,7 +385,7 @@ async function generatePdf({ htmlContent, getBrowser }, retries = 1) {
             displayHeaderFooter: true,
             headerTemplate: "<div></div>",
             footerTemplate: buildPdfFooterTemplate(footerImageDataUrl),
-            margin: { top: "10px", bottom: "104px", left: "8px", right: "8px" },
+            margin: { top: "10px", bottom: "34mm", left: "8px", right: "8px" },
             timeout: CONFIG.pdfTimeoutMs,
         });
     } catch (error) {
@@ -455,7 +455,7 @@ function buildPdfFooterTemplate(footerImageDataUrl) {
         ? `<img class="pdf-footer-cert-logo" src="${footerImageDataUrl}" alt="SME &amp; ISO">`
         : "";
 
-    return `<style>.pdf-footer-cert-cell{width:38%;padding:0 0 0 8px;vertical-align:middle;text-align:right;}.pdf-footer-cert-logo{display:inline-block;width:360px;max-width:100%;height:auto;max-height:120px;object-fit:contain;border:0;}</style><div style="width:100%;box-sizing:border-box;padding:8px 8px 0;border-top:4px solid #000;background:#ffffff;font-family:Arial,sans-serif;font-size:7px;line-height:1.2;color:#536273;"><table role="presentation" style="width:100%;table-layout:fixed;border-collapse:collapse;"><tr><td style="width:62%;padding:0;vertical-align:middle;text-align:left;">${footer.companyLine}<br>${footer.addressLine}<br>${footer.contactLine}</td><td class="pdf-footer-cert-cell">${certificateImage}</td></tr></table></div>`;
+    return `<style>.pdf-footer{width:100%;height:28mm;box-sizing:border-box;background:#ffffff;font-family:Arial,sans-serif;font-size:12px;line-height:1.25;color:#536273;}.pdf-footer-inner{width:100%;height:100%;box-sizing:border-box;padding:5px 8mm 0;}.pdf-footer-table{width:100%;height:100%;table-layout:fixed;border-collapse:collapse;}.pdf-footer-text-cell{width:62%;padding:0;vertical-align:middle;text-align:left;}.pdf-footer-cert-cell{width:38%;padding:0 2mm 0 8px;vertical-align:middle;text-align:right;}.pdf-footer-cert-logo{display:inline-block;width:280px;max-width:100%;height:auto;max-height:90px;object-fit:contain;border:0;}</style><div class="pdf-footer"><div class="pdf-footer-inner"><table role="presentation" class="pdf-footer-table"><tr><td class="pdf-footer-text-cell">${footer.companyLine}<br>${footer.addressLine}<br>${footer.contactLine}</td><td class="pdf-footer-cert-cell">${certificateImage}</td></tr></table></div></div>`;
 }
 
 async function waitForImages(page) {
