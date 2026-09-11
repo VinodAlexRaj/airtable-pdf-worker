@@ -385,7 +385,7 @@ async function generatePdf({ htmlContent, getBrowser }, retries = 1) {
             displayHeaderFooter: true,
             headerTemplate: "<div></div>",
             footerTemplate: buildPdfFooterTemplate(footerImageDataUrl),
-            margin: { top: "10px", bottom: "52px", left: "8px", right: "8px" },
+            margin: { top: "10px", bottom: "104px", left: "8px", right: "8px" },
             timeout: CONFIG.pdfTimeoutMs,
         });
     } catch (error) {
@@ -455,7 +455,7 @@ function buildPdfFooterTemplate(footerImageDataUrl) {
         ? `<img class="pdf-footer-cert-logo" src="${footerImageDataUrl}" alt="SME &amp; ISO">`
         : "";
 
-    return `<style>.pdf-footer-cert-cell{width:32%;padding:0 0 0 8px;vertical-align:middle;text-align:right;}.pdf-footer-cert-logo{display:inline-block;width:120px;max-width:100%;height:auto;max-height:40px;object-fit:contain;border:0;}</style><div style="width:100%;box-sizing:border-box;padding:0 8px;font-family:Arial,sans-serif;font-size:7px;line-height:1.25;color:#536273;"><table role="presentation" style="width:100%;table-layout:fixed;border-collapse:collapse;"><tr><td style="width:68%;padding:0;vertical-align:middle;text-align:left;">${footer.companyLine}<br>${footer.addressLine}<br>${footer.contactLine}</td><td class="pdf-footer-cert-cell">${certificateImage}</td></tr></table></div>`;
+    return `<style>.pdf-footer-cert-cell{width:32%;padding:0 0 0 8px;vertical-align:middle;text-align:right;}.pdf-footer-cert-logo{display:inline-block;width:240px;max-width:100%;height:auto;max-height:80px;object-fit:contain;border:0;}</style><div style="width:100%;box-sizing:border-box;padding:0 8px;font-family:Arial,sans-serif;font-size:14px;line-height:1.25;color:#536273;"><table role="presentation" style="width:100%;table-layout:fixed;border-collapse:collapse;"><tr><td style="width:68%;padding:0;vertical-align:middle;text-align:left;">${footer.companyLine}<br>${footer.addressLine}<br>${footer.contactLine}</td><td class="pdf-footer-cert-cell">${certificateImage}</td></tr></table></div>`;
 }
 
 async function waitForImages(page) {
