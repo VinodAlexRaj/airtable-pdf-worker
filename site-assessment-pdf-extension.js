@@ -30,9 +30,9 @@ const CONFIG = {
     imageBatchSize: 3,
     maxFinalImageBytes: 5 * 1024 * 1024,
     pdfFooter: {
-        companyLine: "Black Gold Security Sdn Bhd 930044-M | 201101001907",
+        companyLine: "Black Gold Security Sdn Bhd (930044-M)",
         addressLine: "No. 9-01 & 02, Jalan Kencana Mas 1/1, Tebrau Business Park, 81100 Johor Bahru",
-        contactLine: "07 - 355 4949 | contact@blackgoldsecurity.my | www.blackgoldsecurity.my",
+        contactLine: "07 - 355 4949 · contact@blackgoldsecurity.my · www.blackgoldsecurity.my",
         imageUrl: "https://media.blackgoldsecurity.com.my/report-logo/260102_SME%20%26%20ISO.png",
     },
 };
@@ -376,13 +376,15 @@ async function generatePdf({ htmlContent, getBrowser }, retries = 1) {
             if (document.fonts?.ready) await document.fonts.ready;
         });
 
+        const footerImageDataUrl = await fetchPdfFooterImageDataUrl();
+
         return await page.pdf({
             format: "A4",
             landscape: false,
             printBackground: true,
             displayHeaderFooter: true,
             headerTemplate: "<div></div>",
-            footerTemplate: buildPdfFooterTemplate(),
+            footerTemplate: buildPdfFooterTemplate(footerImageDataUrl),
             margin: { top: "10px", bottom: "52px", left: "8px", right: "8px" },
             timeout: CONFIG.pdfTimeoutMs,
         });
@@ -411,9 +413,49 @@ async function generatePdf({ htmlContent, getBrowser }, retries = 1) {
     }
 }
 
-function buildPdfFooterTemplate() {
+async function fetchPdfFooterImageDataUrl() {
+    const url = CONFIG.pdfFooter.imageUrl;
+
+    try {
+        const response = await fetchWithAbort(
+            url,
+            { method: "GET" },
+            CONFIG.imageFetchTimeoutMs
+        );
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const mimeType = String(
+            response.headers.get("content-type") || "image/png"
+        )
+            .split(";", 1)[0]
+            .trim();
+
+        console.log(
+            `[PATRIOLLY][SITE_ASSESSMENT_PDF_WORKER][FOOTER_IMAGE] ` +
+            `Status=READY Bytes=${buffer.length}`
+        );
+
+        return `data:${mimeType};base64,${buffer.toString("base64")}`;
+    } catch (error) {
+        console.warn(
+            `[PATRIOLLY][SITE_ASSESSMENT_PDF_WORKER][FOOTER_IMAGE] ` +
+            `Status=SKIPPED Reason=${formatErrorDetail(error)}`
+        );
+        return "";
+    }
+}
+
+function buildPdfFooterTemplate(footerImageDataUrl) {
     const footer = CONFIG.pdfFooter;
-    return `<div style="width:100%;box-sizing:border-box;padding:0 8px;font-family:Arial,sans-serif;font-size:7px;line-height:1.25;color:#536273;"><table role="presentation" style="width:100%;table-layout:fixed;border-collapse:collapse;"><tr><td style="width:80%;padding:0;vertical-align:middle;text-align:left;">${footer.companyLine}<br>${footer.addressLine}<br>${footer.contactLine}</td><td style="width:20%;padding:0 0 0 8px;vertical-align:middle;text-align:right;"><img src="${footer.imageUrl}" alt="SME &amp; ISO" style="display:inline-block;width:78px;max-width:100%;height:auto;max-height:28px;object-fit:contain;border:0;"></td></tr></table></div>`;
+    const certificateImage = footerImageDataUrl
+        ? `<img class="pdf-footer-cert-logo" src="${footerImageDataUrl}" alt="SME &amp; ISO">`
+        : "";
+
+    return `<style>.pdf-footer-cert-cell{width:32%;padding:0 0 0 8px;vertical-align:middle;text-align:right;}.pdf-footer-cert-logo{display:inline-block;width:120px;max-width:100%;height:auto;max-height:40px;object-fit:contain;border:0;}</style><div style="width:100%;box-sizing:border-box;padding:0 8px;font-family:Arial,sans-serif;font-size:7px;line-height:1.25;color:#536273;"><table role="presentation" style="width:100%;table-layout:fixed;border-collapse:collapse;"><tr><td style="width:68%;padding:0;vertical-align:middle;text-align:left;">${footer.companyLine}<br>${footer.addressLine}<br>${footer.contactLine}</td><td class="pdf-footer-cert-cell">${certificateImage}</td></tr></table></div>`;
 }
 
 async function waitForImages(page) {
