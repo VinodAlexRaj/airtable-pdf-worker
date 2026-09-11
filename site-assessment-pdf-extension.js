@@ -30,9 +30,9 @@ const CONFIG = {
     imageBatchSize: 3,
     maxFinalImageBytes: 5 * 1024 * 1024,
     pdfFooter: {
-        companyLine: "Black Gold Security Sdn Bhd (930044-M)",
+        companyLine: "Black Gold Security Sdn Bhd (930044-M | 201101001907)",
         addressLine: "No. 9-01 & 02, Jalan Kencana Mas 1/1, Tebrau Business Park, 81100 Johor Bahru",
-        contactLine: "07 - 355 4949 · contact@blackgoldsecurity.my · www.blackgoldsecurity.my",
+        contactLine: "07 - 355 4949 | contact@blackgoldsecurity.my | www.blackgoldsecurity.my",
         imageUrl: "https://media.blackgoldsecurity.com.my/report-logo/260102_SME%20%26%20ISO.png",
     },
 };
@@ -455,7 +455,7 @@ function buildPdfFooterTemplate(footerImageDataUrl) {
         ? `<img class="pdf-footer-cert-logo" src="${footerImageDataUrl}" alt="SME &amp; ISO">`
         : "";
 
-    return `<style>.pdf-footer-cert-cell{width:32%;padding:0 0 0 8px;vertical-align:middle;text-align:right;}.pdf-footer-cert-logo{display:inline-block;width:240px;max-width:100%;height:auto;max-height:80px;object-fit:contain;border:0;}</style><div style="width:100%;box-sizing:border-box;padding:0 8px;font-family:Arial,sans-serif;font-size:14px;line-height:1.25;color:#536273;"><table role="presentation" style="width:100%;table-layout:fixed;border-collapse:collapse;"><tr><td style="width:68%;padding:0;vertical-align:middle;text-align:left;">${footer.companyLine}<br>${footer.addressLine}<br>${footer.contactLine}</td><td class="pdf-footer-cert-cell">${certificateImage}</td></tr></table></div>`;
+    return `<style>.pdf-footer-cert-cell{width:38%;padding:0 0 0 8px;vertical-align:middle;text-align:right;}.pdf-footer-cert-logo{display:inline-block;width:360px;max-width:100%;height:auto;max-height:120px;object-fit:contain;border:0;}</style><div style="width:100%;box-sizing:border-box;padding:8px 8px 0;border-top:4px solid #000;background:#ffffff;font-family:Arial,sans-serif;font-size:7px;line-height:1.2;color:#536273;"><table role="presentation" style="width:100%;table-layout:fixed;border-collapse:collapse;"><tr><td style="width:62%;padding:0;vertical-align:middle;text-align:left;">${footer.companyLine}<br>${footer.addressLine}<br>${footer.contactLine}</td><td class="pdf-footer-cert-cell">${certificateImage}</td></tr></table></div>`;
 }
 
 async function waitForImages(page) {
