@@ -29,6 +29,12 @@ const CONFIG = {
     imageFetchTimeoutMs: 15000,
     imageBatchSize: 3,
     maxFinalImageBytes: 5 * 1024 * 1024,
+    pdfFooter: {
+        companyLine: "Black Gold Security Sdn Bhd 930044-M | 201101001907",
+        addressLine: "No. 9-01 & 02, Jalan Kencana Mas 1/1, Tebrau Business Park, 81100 Johor Bahru",
+        contactLine: "07 - 355 4949 | contact@blackgoldsecurity.my | www.blackgoldsecurity.my",
+        imageUrl: "https://media.blackgoldsecurity.com.my/report-logo/260102_SME%20%26%20ISO.png",
+    },
 };
 
 module.exports = function registerSiteAssessmentPdfExtension(context) {
@@ -376,9 +382,8 @@ async function generatePdf({ htmlContent, getBrowser }, retries = 1) {
             printBackground: true,
             displayHeaderFooter: true,
             headerTemplate: "<div></div>",
-            footerTemplate:
-                '<div style="width:100%;font-size:8px;color:#666;text-align:right;padding-right:10px;font-family:Arial,sans-serif;">Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>',
-            margin: { top: "10px", bottom: "26px", left: "8px", right: "8px" },
+            footerTemplate: buildPdfFooterTemplate(),
+            margin: { top: "10px", bottom: "52px", left: "8px", right: "8px" },
             timeout: CONFIG.pdfTimeoutMs,
         });
     } catch (error) {
@@ -404,6 +409,11 @@ async function generatePdf({ htmlContent, getBrowser }, retries = 1) {
             }
         }
     }
+}
+
+function buildPdfFooterTemplate() {
+    const footer = CONFIG.pdfFooter;
+    return `<div style="width:100%;box-sizing:border-box;padding:0 8px;font-family:Arial,sans-serif;font-size:7px;line-height:1.25;color:#536273;"><table role="presentation" style="width:100%;table-layout:fixed;border-collapse:collapse;"><tr><td style="width:80%;padding:0;vertical-align:middle;text-align:left;">${footer.companyLine}<br>${footer.addressLine}<br>${footer.contactLine}</td><td style="width:20%;padding:0 0 0 8px;vertical-align:middle;text-align:right;"><img src="${footer.imageUrl}" alt="SME &amp; ISO" style="display:inline-block;width:78px;max-width:100%;height:auto;max-height:28px;object-fit:contain;border:0;"></td></tr></table></div>`;
 }
 
 async function waitForImages(page) {
