@@ -9,6 +9,7 @@ async function generatePdf(options = {}) {
         getBrowser,
         viewport = DEFAULT_VIEWPORT,
         prepareHtml,
+        preparePage,
         setContentOptions = {
             waitUntil: "domcontentloaded",
             timeout: 30000,
@@ -64,6 +65,10 @@ async function generatePdf(options = {}) {
 
         if (styleContent) {
             await page.addStyleTag({ content: styleContent });
+        }
+
+        if (typeof preparePage === "function") {
+            await preparePage(page, { htmlContent: preparedHtml });
         }
 
         if (waitForImagesTimeoutMs > 0) {

@@ -6,6 +6,10 @@ const {
 } = require("../shared/report-footer");
 const { attachPdfToAirtable } = require("../shared/airtable-pdf-attachment");
 const { generatePdf: renderPdf } = require("../shared/pdf-renderer");
+const {
+    PATROLLING_LAYOUT_STYLES,
+    preparePatrollingPage,
+} = require("./patrolling-report-layout");
 
 const CONFIG = {
     route: "/generate-pdf",
@@ -177,6 +181,8 @@ async function generatePatrollingReportPdf(
             waitUntil: "domcontentloaded",
             timeout: CONFIG.pdfTimeoutMs,
         },
+        styleContent: PATROLLING_LAYOUT_STYLES,
+        preparePage: preparePatrollingPage,
         blockGoogleFonts: true,
         waitForImagesTimeoutMs: 5000,
         pdfOptions: async () => {
