@@ -528,6 +528,19 @@ registerIncidentReportPdfExtension({
     airtableBaseId: AIRTABLE_BASE_ID,
 });
 
+const registerPatrollingReportPdfExtension =
+    require('./patrolling-report-pdf-extension');
+
+registerPatrollingReportPdfExtension({
+    app,
+    getBrowser,
+    scheduleIdleClose,
+    publicBaseUrl: PUBLIC_BASE_URL,
+    reportPdfAuthToken: REPORT_PDF_AUTH_TOKEN,
+    airtableApiKey: AIRTABLE_API_KEY,
+    airtableBaseId: AIRTABLE_BASE_ID,
+});
+
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
     console.log(`Public base URL: ${PUBLIC_BASE_URL}`);
