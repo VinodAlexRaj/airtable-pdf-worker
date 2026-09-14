@@ -59,6 +59,11 @@ const PATROLLING_LAYOUT_STYLES = `
             object-position: center !important;
         }
 
+        .patrolling-photo-count-1 .patrolling-photo-image,
+        .patrolling-photo-count-2 .patrolling-photo-image {
+            max-height: none !important;
+        }
+
         .patrolling-gallery-grid .patrolling-photo-image {
             width: 100% !important;
         }
