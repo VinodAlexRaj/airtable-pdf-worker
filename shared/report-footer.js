@@ -14,15 +14,11 @@ const DEFAULT_REPORT_FOOTER = Object.freeze({
 });
 
 const DEFAULT_REPORT_PDF_MARGINS = Object.freeze({
-    top: "3mm",
+    top: "14mm",
     bottom: "34mm",
     left: "12mm",
     right: "12mm",
 });
-
-const COMPACT_FOOTER_LEFT_INSET = "12mm";
-const COMPACT_FOOTER_RIGHT_INSET = "12mm";
-const COMPACT_FOOTER_LOGO_SLOT_WIDTH = "62mm";
 
 function getReportPdfMargins(overrides = {}) {
     return {
@@ -34,17 +30,12 @@ function getReportPdfMargins(overrides = {}) {
 function buildReportFooterTemplate({
     footerImageDataUrl = "",
     footer = DEFAULT_REPORT_FOOTER,
-    layout = "stacked",
 } = {}) {
     const certificateImage = footerImageDataUrl
         ? `<img class="pdf-footer-cert-logo" src="${footerImageDataUrl}" alt="SME &amp; ISO">`
         : "";
 
-    if (layout === "compact") {
-        return `<style>.pdf-footer{position:relative;width:100%;height:28mm;box-sizing:border-box;overflow:hidden;background:#ffffff;font-family:Arial,sans-serif;font-size:10px;line-height:1.1;color:#536273;}.pdf-footer-inner{position:absolute;top:0;right:${COMPACT_FOOTER_RIGHT_INSET};bottom:0;left:${COMPACT_FOOTER_LEFT_INSET};box-sizing:border-box;padding-top:3mm;overflow:hidden;}.pdf-footer-row{display:flex;width:100%;height:100%;box-sizing:border-box;align-items:center;gap:8mm;overflow:hidden;}.pdf-footer-info{flex:1 1 0;min-width:0;overflow:hidden;}.pdf-footer-info-line{display:block;min-width:0;overflow:hidden;white-space:nowrap;line-height:1.1;}.pdf-footer-logos{flex:0 0 ${COMPACT_FOOTER_LOGO_SLOT_WIDTH};width:${COMPACT_FOOTER_LOGO_SLOT_WIDTH};min-width:0;display:flex;align-items:center;justify-content:flex-end;overflow:hidden;white-space:nowrap;}.pdf-footer-cert-logo{display:block;width:${COMPACT_FOOTER_LOGO_SLOT_WIDTH};height:auto;max-height:23mm;object-fit:contain;border:0;}</style><div class="pdf-footer"><div class="pdf-footer-inner"><div class="pdf-footer-row"><div class="pdf-footer-info"><div class="pdf-footer-info-line">${footer.companyLine}</div><div class="pdf-footer-info-line">${footer.addressLine}</div><div class="pdf-footer-info-line">${footer.contactLine}</div></div><div class="pdf-footer-logos">${certificateImage}</div></div></div></div>`;
-    }
-
-    return `<style>.pdf-footer{width:100%;height:28mm;box-sizing:border-box;background:#ffffff;font-family:Arial,sans-serif;font-size:12px;line-height:1.25;color:#536273;}.pdf-footer-inner{width:100%;height:100%;box-sizing:border-box;padding:5px 8mm 0;}.pdf-footer-table{width:100%;height:100%;table-layout:fixed;border-collapse:collapse;}.pdf-footer-text-cell{width:62%;padding:0;vertical-align:middle;text-align:left;}.pdf-footer-cert-cell{width:38%;padding:0 2mm 0 8px;vertical-align:middle;text-align:right;}.pdf-footer-cert-logo{display:inline-block;width:280px;max-width:100%;height:auto;max-height:90px;object-fit:contain;border:0;}</style><div class="pdf-footer"><div class="pdf-footer-inner"><table role="presentation" class="pdf-footer-table"><tr><td class="pdf-footer-text-cell">${footer.companyLine}<br>${footer.addressLine}<br>${footer.contactLine}</td><td class="pdf-footer-cert-cell">${certificateImage}</td></tr></table></div></div>`;
+    return `<style>.pdf-footer{width:100%;height:28mm;box-sizing:border-box;background:#ffffff;font-family:Arial,sans-serif;font-size:12px;line-height:1.25;color:#536273;}.pdf-footer-inner{width:100%;height:100%;box-sizing:border-box;padding:5px 12mm 0;}.pdf-footer-table{width:100%;height:100%;table-layout:fixed;border-collapse:collapse;}.pdf-footer-text-cell{width:70%;padding:0;vertical-align:middle;text-align:left;}.pdf-footer-cert-cell{width:30%;padding:0 0mm 0 8px;vertical-align:middle;text-align:right;}.pdf-footer-cert-logo{display:inline-block;width:270px;max-width:100%;height:auto;max-height:90px;object-fit:contain;border:0;}</style><div class="pdf-footer"><div class="pdf-footer-inner"><table role="presentation" class="pdf-footer-table"><tr><td class="pdf-footer-text-cell">${footer.companyLine}<br>${footer.addressLine}<br>${footer.contactLine}</td><td class="pdf-footer-cert-cell">${certificateImage}</td></tr></table></div></div>`;
 }
 
 async function fetchReportFooterImageDataUrl({
@@ -96,7 +87,6 @@ function buildReportPdfOptions({
     landscape = false,
     timeout = 30000,
     marginOverrides = {},
-    footerLayout = "stacked",
 } = {}) {
     return {
         format,
@@ -104,10 +94,7 @@ function buildReportPdfOptions({
         printBackground: true,
         displayHeaderFooter: true,
         headerTemplate: "<div></div>",
-        footerTemplate: buildReportFooterTemplate({
-            footerImageDataUrl,
-            layout: footerLayout,
-        }),
+        footerTemplate: buildReportFooterTemplate({ footerImageDataUrl }),
         margin: getReportPdfMargins(marginOverrides),
         timeout,
     };
