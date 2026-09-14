@@ -10,8 +10,11 @@ POST /generate-incident-report-pdf
 - Writes attachment to Airtable Incident Report.Incident Report PDF
 */
 
-const fs = require("fs");
-const path = require("path");
+const {
+    assertAttachmentFieldEmpty,
+    attachPdfToAirtable,
+} = require("../shared/airtable-pdf-attachment");
+const { generatePdf: renderPdf } = require("../shared/pdf-renderer");
 
 const CONFIG = {
     route: "/generate-incident-report-pdf",
@@ -114,6 +117,14 @@ module.exports = function registerIncidentReportPdfExtension(context) {
                 recordId,
                 airtableApiKey,
                 airtableBaseId,
+                airtableTableName: CONFIG.airtableTableName,
+                attachmentField: CONFIG.attachmentField,
+                requestTimeoutMs: CONFIG.requestTimeoutMs,
+                responseParser: "text-json",
+                invalidJsonMessage: "Airtable preflight returned invalid JSON.",
+                conflictMessage:
+                    `CONFLICT ERROR: ${CONFIG.attachmentField} already exists on ` +
+                    `record "${recordId}". Automatic replacement is not allowed.`,
             });
 
             const pdfBuffer = await withDeadline(
@@ -129,6 +140,16 @@ module.exports = function registerIncidentReportPdfExtension(context) {
                 publicBaseUrl,
                 airtableApiKey,
                 airtableBaseId,
+                airtableTableName: CONFIG.airtableTableName,
+                attachmentField: CONFIG.attachmentField,
+                tempFilenamePrefix: "incident-report",
+                cleanupDelayMs: CONFIG.cleanupDelayMs,
+                requestTimeoutMs: CONFIG.requestTimeoutMs,
+                responseErrorPrefix: "Airtable PDF write returned",
+                invalidJsonMessage: "Airtable PDF write returned invalid JSON.",
+                missingAttachmentMessage:
+                    `Airtable response did not contain ${CONFIG.attachmentField}.`,
+                requireTruthyAttachment: true,
             });
 
             console.log(
@@ -154,40 +175,21 @@ module.exports = function registerIncidentReportPdfExtension(context) {
 };
 
 async function generatePdf({ htmlContent, getBrowser }, retries = 1) {
-    let page = null;
-
-    try {
-        const browser = await getBrowser();
-        page = await browser.newPage();
-        await page.setViewport({
+    return renderPdf({
+        htmlContent,
+        getBrowser,
+        retries,
+        viewport: {
             width: CONFIG.viewportWidth,
             height: CONFIG.viewportHeight,
-        });
-        await page.emulateMediaType("print");
-
-        await page.setRequestInterception(true);
-        page.on("request", (request) => {
-            const url = request.url();
-            if (
-                url.includes("fonts.googleapis.com") ||
-                url.includes("fonts.gstatic.com")
-            ) {
-                request.abort();
-            } else {
-                request.continue();
-            }
-        });
-
-        await page.setContent(htmlContent, {
+        },
+        setContentOptions: {
             waitUntil: "domcontentloaded",
             timeout: CONFIG.pdfTimeoutMs,
-        });
-        await waitForImages(page);
-        await page.evaluate(async () => {
-            if (document.fonts?.ready) await document.fonts.ready;
-        });
-
-        return await page.pdf({
+        },
+        blockGoogleFonts: true,
+        waitForImagesTimeoutMs: 10000,
+        pdfOptions: {
             format: "A4",
             landscape: false,
             printBackground: true,
@@ -202,172 +204,10 @@ async function generatePdf({ htmlContent, getBrowser }, retries = 1) {
                 right: "8px",
             },
             timeout: CONFIG.pdfTimeoutMs,
-        });
-    } catch (error) {
-        const message = formatErrorDetail(error);
-
-        if (
-            retries > 0 &&
-            (message.includes("detached") ||
-                message.includes("Connection closed") ||
-                message.includes("Target closed"))
-        ) {
-            return generatePdf({ htmlContent, getBrowser }, retries - 1);
-        }
-
-        throw new Error(`PDF generation failed: ${message}`);
-    } finally {
-        if (page) {
-            try {
-                await page.close();
-            } catch (error) {
-                console.error(
-                    `${LOG}[PAGE_CLOSE_ERROR] ${formatErrorDetail(error)}`
-                );
-            }
-        }
-    }
-}
-
-async function waitForImages(page) {
-    await page.evaluate(async () => {
-        const images = Array.from(document.images || []);
-        await Promise.all(
-            images.map((img) => {
-                if (img.complete) return Promise.resolve();
-                return new Promise((resolve) => {
-                    const done = () => resolve();
-                    img.addEventListener("load", done, { once: true });
-                    img.addEventListener("error", done, { once: true });
-                    setTimeout(done, 10000);
-                });
-            })
-        );
+        },
+        logPrefix: LOG,
+        formatErrorDetail,
     });
-}
-
-async function assertAttachmentFieldEmpty({
-    recordId,
-    airtableApiKey,
-    airtableBaseId,
-}) {
-    const record = await fetchAirtableRecord(
-        recordId,
-        airtableApiKey,
-        airtableBaseId
-    );
-    const attachments = record?.fields?.[CONFIG.attachmentField] || [];
-
-    if (Array.isArray(attachments) && attachments.length) {
-        throw new Error(
-            `CONFLICT ERROR: ${CONFIG.attachmentField} already exists on ` +
-            `record "${recordId}". Automatic replacement is not allowed.`
-        );
-    }
-}
-
-async function fetchAirtableRecord(recordId, airtableApiKey, airtableBaseId) {
-    const url =
-        `https://api.airtable.com/v0/${airtableBaseId}/` +
-        `${encodeURIComponent(CONFIG.airtableTableName)}/${recordId}`;
-    const response = await fetchWithTimeout(url, {
-        headers: { Authorization: `Bearer ${airtableApiKey}` },
-    });
-    const body = await response.text();
-
-    if (!response.ok) {
-        throw new Error(
-            `Airtable preflight returned ${response.status}: ${body}`
-        );
-    }
-
-    try {
-        return JSON.parse(body);
-    } catch {
-        throw new Error("Airtable preflight returned invalid JSON.");
-    }
-}
-
-async function attachPdfToAirtable({
-    pdfBuffer,
-    recordId,
-    filename,
-    publicBaseUrl,
-    airtableApiKey,
-    airtableBaseId,
-}) {
-    const publicDir = path.join(__dirname, "public");
-    const tempFilename =
-        `incident-report-${Date.now()}-` +
-        `${Math.random().toString(36).slice(2, 10)}.pdf`;
-    const filePath = path.join(publicDir, tempFilename);
-
-    try {
-        if (!fs.existsSync(publicDir)) {
-            fs.mkdirSync(publicDir, { recursive: true });
-        }
-
-        await fs.promises.writeFile(filePath, pdfBuffer);
-
-        const publicUrl =
-            `${String(publicBaseUrl).replace(/\/$/, "")}/public/` +
-            encodeURIComponent(tempFilename);
-        const airtableUrl =
-            `https://api.airtable.com/v0/${airtableBaseId}/` +
-            encodeURIComponent(CONFIG.airtableTableName);
-
-        const response = await fetchWithTimeout(airtableUrl, {
-            method: "PATCH",
-            headers: {
-                Authorization: `Bearer ${airtableApiKey}`,
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                records: [
-                    {
-                        id: recordId,
-                        fields: {
-                            [CONFIG.attachmentField]: [
-                                { url: publicUrl, filename },
-                            ],
-                        },
-                    },
-                ],
-            }),
-        });
-        const body = await response.text();
-
-        if (!response.ok) {
-            throw new Error(
-                `Airtable PDF write returned ${response.status}: ${body}`
-            );
-        }
-
-        let data;
-        try {
-            data = JSON.parse(body);
-        } catch {
-            throw new Error("Airtable PDF write returned invalid JSON.");
-        }
-
-        const attachment =
-            data?.records?.[0]?.fields?.[CONFIG.attachmentField]?.[0];
-
-        if (!attachment) {
-            throw new Error(
-                `Airtable response did not contain ${CONFIG.attachmentField}.`
-            );
-        }
-
-        setTimeout(() => {
-            fs.promises.unlink(filePath).catch(() => {});
-        }, CONFIG.cleanupDelayMs);
-
-        return attachment;
-    } catch (error) {
-        fs.promises.unlink(filePath).catch(() => {});
-        throw error;
-    }
 }
 
 function buildAttachmentFilename(incidentId) {
@@ -385,20 +225,6 @@ function validateContext(values) {
                 `${LOG}[CONFIGURATION_ERROR] Missing extension context: ${key}`
             );
         }
-    }
-}
-
-async function fetchWithTimeout(url, options = {}) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), CONFIG.requestTimeoutMs);
-
-    try {
-        return await fetch(url, {
-            ...options,
-            signal: controller.signal,
-        });
-    } finally {
-        clearTimeout(timer);
     }
 }
 
