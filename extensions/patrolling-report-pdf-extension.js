@@ -188,6 +188,7 @@ async function generatePatrollingReportPdf(
                 format: "A4",
                 landscape: false,
                 timeout: CONFIG.pdfTimeoutMs,
+                footerLayout: "compact",
             });
         },
         logPrefix: LOG,
