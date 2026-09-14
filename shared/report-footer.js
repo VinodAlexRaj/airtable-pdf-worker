@@ -14,7 +14,7 @@ const DEFAULT_REPORT_FOOTER = Object.freeze({
 });
 
 const DEFAULT_REPORT_PDF_MARGINS = Object.freeze({
-    top: "14mm",
+    top: "7mm",
     bottom: "34mm",
     left: "12mm",
     right: "12mm",
