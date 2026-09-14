@@ -13,6 +13,8 @@ const INTERNAL_AUTH_TOKEN = process.env.INTERNAL_AUTH_TOKEN;
 const REPORT_PDF_AUTH_TOKEN = process.env.REPORT_PDF_AUTH_TOKEN;
 const CLEANUP_DELAY_MS = 60000; // 1 minute
 const sharp = require('sharp');
+const generatePatrollingReportPdf =
+    require('./patrolling-report-pdf-renderer');
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb' }));
@@ -95,7 +97,11 @@ async function processQueue() {
     console.log(`Processing job for record ${recordId}. Queue remaining: ${jobQueue.length}`);
 
     try {
-        const pdfBuffer = await generatePDFFromHTML(htmlContent);
+        const pdfBuffer = await generatePatrollingReportPdf({
+            htmlContent,
+            getBrowser,
+            inlineImages,
+        });
         await uploadPDFToAirtable(pdfBuffer, recordId, location);
         console.log(`PDF successfully attached to record ${recordId}`);
     } catch (error) {
@@ -519,19 +525,6 @@ const registerIncidentReportPdfExtension =
     require('./incident-report-pdf-extension');
 
 registerIncidentReportPdfExtension({
-    app,
-    getBrowser,
-    scheduleIdleClose,
-    publicBaseUrl: PUBLIC_BASE_URL,
-    reportPdfAuthToken: REPORT_PDF_AUTH_TOKEN,
-    airtableApiKey: AIRTABLE_API_KEY,
-    airtableBaseId: AIRTABLE_BASE_ID,
-});
-
-const registerPatrollingReportPdfExtension =
-    require('./patrolling-report-pdf-extension');
-
-registerPatrollingReportPdfExtension({
     app,
     getBrowser,
     scheduleIdleClose,
