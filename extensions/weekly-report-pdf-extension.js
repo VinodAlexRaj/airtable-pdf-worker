@@ -8,20 +8,19 @@ GUARANTEES
 - Does not use Sharp or image inlining.
 - POST /generate-weekly-pdf is synchronous: HTTP 200 is returned only after
   Puppeteer generated the PDF and Airtable accepted the attachment write.
-- Refuses to overwrite an existing Record.Weekly Report PDF.
+- Validates and attaches only to the configured Weekly archive row.
+- Refuses to overwrite an existing Weekly/Monthly Report.PDF attachment.
 - PDF business/KPI calculation is not performed here.
 */
 
-const {
-    assertAttachmentFieldEmpty,
-    attachPdfToAirtable,
-} = require("../shared/airtable-pdf-attachment");
-const { generatePdf: renderPdf } = require("../shared/pdf-renderer");
+const fs = require("fs");
+const path = require("path");
 
 const CONFIG = {
     route: "/generate-weekly-pdf",
-    airtableTableName: "Record",
-    attachmentField: "Weekly Report PDF",
+    airtableTableId: "tbl02SSiR3rfuUPtQ",
+    reportType: "Weekly",
+    attachmentField: "PDF attachment",
     cleanupDelayMs: 60000,
     airtableRequestTimeoutMs: 6000,
     generationDeadlineMs: 15000,
@@ -73,6 +72,11 @@ module.exports = function registerWeeklyReportPdfExtension(context) {
                 error: "periodStart and periodEnd must use YYYY-MM-DD format",
             });
         }
+        if (!isWednesdayTuesdayPeriod(periodStart, periodEnd)) {
+            return res.status(400).json({
+                error: "periodStart and periodEnd must describe a Wednesday-to-Tuesday week",
+            });
+        }
 
         const attachmentFilename = buildAttachmentFilename(
             periodStart,
@@ -87,18 +91,10 @@ module.exports = function registerWeeklyReportPdfExtension(context) {
         try {
             await assertAttachmentFieldEmpty({
                 recordId,
+                periodStart,
+                periodEnd,
                 airtableApiKey,
                 airtableBaseId,
-                airtableTableName: CONFIG.airtableTableName,
-                attachmentField: CONFIG.attachmentField,
-                requestTimeoutMs: CONFIG.airtableRequestTimeoutMs,
-                timeoutErrorMessage:
-                    `HTTP request timed out after ` +
-                    `${CONFIG.airtableRequestTimeoutMs / 1000} seconds.`,
-                responseParser: "json",
-                conflictMessage:
-                    `CONFLICT ERROR: ${CONFIG.attachmentField} already exists on ` +
-                    `Record "${recordId}". Automatic replacement is not allowed.`,
             });
 
             const pdfBuffer = await withDeadline(
@@ -113,31 +109,12 @@ module.exports = function registerWeeklyReportPdfExtension(context) {
             const uploadResult = await attachPdfToAirtable({
                 pdfBuffer,
                 recordId,
-                filename: attachmentFilename,
+                periodStart,
+                periodEnd,
+                attachmentFilename,
                 publicBaseUrl,
                 airtableApiKey,
                 airtableBaseId,
-                airtableTableName: CONFIG.airtableTableName,
-                attachmentField: CONFIG.attachmentField,
-                tempFilenamePrefix: "weekly-kpi-summary",
-                cleanupDelayMs: CONFIG.cleanupDelayMs,
-                requestTimeoutMs: CONFIG.airtableRequestTimeoutMs,
-                timeoutErrorMessage:
-                    `HTTP request timed out after ` +
-                    `${CONFIG.airtableRequestTimeoutMs / 1000} seconds.`,
-                cleanupCallbacks: {
-                    onDeleted: (filename) => {
-                        console.log(
-                            `[PATRIOLLY][WEEKLY_PDF_WORKER][CLEANUP] Deleted ${filename}`
-                        );
-                    },
-                    onError: (filename, error) => {
-                        console.error(
-                            `[PATRIOLLY][WEEKLY_PDF_WORKER][CLEANUP_ERROR] ` +
-                            `${filename}: ${error.message}`
-                        );
-                    },
-                },
             });
 
             console.log(
@@ -173,19 +150,25 @@ module.exports = function registerWeeklyReportPdfExtension(context) {
 };
 
 async function generateWeeklyPdf({ htmlContent, getBrowser }, retries = 1) {
-    return renderPdf({
-        htmlContent,
-        getBrowser,
-        retries,
-        viewport: {
+    let page = null;
+
+    try {
+        const browser = await getBrowser();
+        page = await browser.newPage();
+
+        await page.setViewport({
             width: CONFIG.viewportWidth,
             height: CONFIG.viewportHeight,
-        },
-        setContentOptions: {
+        });
+        await page.emulateMediaType("print");
+
+        await page.setContent(htmlContent, {
             waitUntil: "domcontentloaded",
             timeout: CONFIG.pdfTimeoutMs,
-        },
-        styleContent: `
+        });
+
+        await page.addStyleTag({
+            content: `
                 html, body {
                     margin: 0 !important;
                     padding: 0 !important;
@@ -195,7 +178,15 @@ async function generateWeeklyPdf({ htmlContent, getBrowser }, retries = 1) {
                     print-color-adjust: exact !important;
                 }
             `,
-        pdfOptions: {
+        });
+
+        await page.evaluate(async () => {
+            if (document.fonts?.ready) {
+                await document.fonts.ready;
+            }
+        });
+
+        return await page.pdf({
             format: "A4",
             landscape: false,
             printBackground: true,
@@ -213,9 +204,190 @@ async function generateWeeklyPdf({ htmlContent, getBrowser }, retries = 1) {
                 right: "10px",
             },
             timeout: CONFIG.pdfTimeoutMs,
+        });
+    } catch (error) {
+        const message = String(error?.message || error || "Unknown error");
+
+        if (
+            retries > 0 &&
+            (message.includes("detached") ||
+                message.includes("Connection closed") ||
+                message.includes("Target closed"))
+        ) {
+            return generateWeeklyPdf(
+                { htmlContent, getBrowser },
+                retries - 1
+            );
+        }
+
+        throw new Error(`PDF generation failed: ${message}`);
+    } finally {
+        if (page) {
+            try {
+                await page.close();
+            } catch (error) {
+                console.error(
+                    `[PATRIOLLY][WEEKLY_PDF_WORKER][PAGE_CLOSE_ERROR] ` +
+                    `${error.message}`
+                );
+            }
+        }
+    }
+}
+
+async function assertAttachmentFieldEmpty({
+    recordId,
+    periodStart,
+    periodEnd,
+    airtableApiKey,
+    airtableBaseId,
+}) {
+    const url =
+        `https://api.airtable.com/v0/${airtableBaseId}/` +
+        `${CONFIG.airtableTableId}/${recordId}`;
+
+    const response = await fetchWithTimeout(url, {
+        method: "GET",
+        headers: {
+            Authorization: `Bearer ${airtableApiKey}`,
         },
-        logPrefix: "[PATRIOLLY][WEEKLY_PDF_WORKER]",
     });
+
+    if (!response.ok) {
+        const body = await response.text();
+        throw new Error(
+            `Airtable preflight returned ${response.status}: ${body}`
+        );
+    }
+
+    const record = await response.json();
+    const fields = record?.fields || {};
+    const typeValue = fields.Type;
+    const typeName = typeof typeValue === "string" ? typeValue : typeValue?.name;
+    if (record?.id !== recordId || typeName !== CONFIG.reportType ||
+        normalizeAirtableDate(fields["Start Period"]) !== periodStart ||
+        normalizeAirtableDate(fields["End Period"]) !== periodEnd) {
+        throw new Error(
+            `VALIDATION ERROR: Archive record must be Type=${CONFIG.reportType} for ${periodStart} ~ ${periodEnd}.`
+        );
+    }
+    const attachments = fields[CONFIG.attachmentField] || [];
+
+    if (Array.isArray(attachments) && attachments.length > 0) {
+        throw new Error(
+            `CONFLICT ERROR: ${CONFIG.attachmentField} already exists on ` +
+            `Weekly archive row "${recordId}". Automatic replacement is not allowed.`
+        );
+    }
+}
+
+async function attachPdfToAirtable({
+    pdfBuffer,
+    recordId,
+    periodStart,
+    periodEnd,
+    attachmentFilename,
+    publicBaseUrl,
+    airtableApiKey,
+    airtableBaseId,
+}) {
+    const publicDir = path.join(__dirname, "public");
+    const tempFilename = buildSafeTempFilename();
+    const filePath = path.join(publicDir, tempFilename);
+
+    try {
+        if (!fs.existsSync(publicDir)) {
+            fs.mkdirSync(publicDir, { recursive: true });
+        }
+
+        await fs.promises.writeFile(filePath, pdfBuffer);
+
+        const base = String(publicBaseUrl).replace(/\/$/, "");
+        const publicUrl = `${base}/public/${encodeURIComponent(tempFilename)}`;
+        const airtableUrl =
+            `https://api.airtable.com/v0/${airtableBaseId}/` +
+            `${CONFIG.airtableTableId}`;
+
+        const response = await fetchWithTimeout(airtableUrl, {
+            method: "PATCH",
+            headers: {
+                Authorization: `Bearer ${airtableApiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                records: [
+                    {
+                        id: recordId,
+                        fields: {
+                            [CONFIG.attachmentField]: [
+                                {
+                                    url: publicUrl,
+                                    filename: attachmentFilename,
+                                },
+                            ],
+                        },
+                    },
+                ],
+            }),
+        });
+
+        const responseText = await response.text();
+        if (!response.ok) {
+            throw new Error(
+                `Airtable attachment write returned ${response.status}: ${responseText}`
+            );
+        }
+
+        let responseData;
+        try {
+            responseData = JSON.parse(responseText);
+        } catch {
+            throw new Error(
+                "Airtable attachment write returned invalid JSON."
+            );
+        }
+
+        const attachments =
+            responseData?.records?.[0]?.fields?.[CONFIG.attachmentField] || [];
+
+        if (!Array.isArray(attachments) || attachments.length === 0) {
+            throw new Error(
+                `Airtable attachment write succeeded but ${CONFIG.attachmentField} ` +
+                `was not returned on the updated record.`
+            );
+        }
+
+        scheduleCleanup(filePath, tempFilename);
+
+        return attachments[0];
+    } catch (error) {
+        await cleanupFile(filePath, tempFilename);
+        throw error;
+    }
+}
+
+async function fetchWithTimeout(url, options) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+        () => controller.abort(),
+        CONFIG.airtableRequestTimeoutMs
+    );
+
+    try {
+        return await fetch(url, {
+            ...options,
+            signal: controller.signal,
+        });
+    } catch (error) {
+        if (error?.name === "AbortError") {
+            throw new Error(
+                `HTTP request timed out after ${CONFIG.airtableRequestTimeoutMs / 1000} seconds.`
+            );
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
 }
 
 function withDeadline(promise, timeoutMs, message) {
@@ -237,6 +409,34 @@ function buildAttachmentFilename(periodStart, periodEnd) {
         `Weekly KPI Summary ( ${formatFilenameDate(periodStart)} ~ ` +
         `${formatFilenameDate(periodEnd)} ).pdf`
     );
+}
+
+function buildSafeTempFilename() {
+    return `weekly-kpi-summary-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 10)}.pdf`;
+}
+
+function scheduleCleanup(filePath, filename) {
+    setTimeout(async () => {
+        await cleanupFile(filePath, filename);
+    }, CONFIG.cleanupDelayMs);
+}
+
+async function cleanupFile(filePath, filename) {
+    try {
+        if (fs.existsSync(filePath)) {
+            await fs.promises.unlink(filePath);
+            console.log(
+                `[PATRIOLLY][WEEKLY_PDF_WORKER][CLEANUP] Deleted ${filename}`
+            );
+        }
+    } catch (error) {
+        console.error(
+            `[PATRIOLLY][WEEKLY_PDF_WORKER][CLEANUP_ERROR] ${filename}: ` +
+            `${error.message}`
+        );
+    }
 }
 
 function validateContext(values) {
@@ -264,6 +464,23 @@ function isIsoDate(value) {
         date.getUTCMonth() + 1 === month &&
         date.getUTCDate() === day
     );
+}
+
+function normalizeAirtableDate(value) {
+    return value ? String(value).slice(0, 10) : "";
+}
+
+function isWednesdayTuesdayPeriod(start, end) {
+    const addDays = (value, count) => {
+        const [year, month, day] = value.split("-").map(Number);
+        const date = new Date(Date.UTC(year, month - 1, day + count));
+        return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+    };
+    const weekday = (value) => {
+        const [year, month, day] = value.split("-").map(Number);
+        return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+    };
+    return weekday(start) === 3 && weekday(end) === 2 && addDays(start, 6) === end;
 }
 
 function formatFilenameDate(value) {
