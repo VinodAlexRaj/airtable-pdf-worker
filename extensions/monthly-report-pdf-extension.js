@@ -9,20 +9,26 @@ GUARANTEES
 - Does not use Sharp or image inlining.
 - POST /generate-monthly-pdf is synchronous: HTTP 200 is returned only after
   Puppeteer generated the PDF and Airtable accepted the attachment write.
-- Refuses to overwrite an existing Record.Monthly Report PDF.
+- Writes only to the fixed Weekly/Monthly Report archive table and refuses to overwrite its PDF.
 - PDF business/KPI calculation is not performed here.
 */
 
-const {
-    assertAttachmentFieldEmpty,
-    attachPdfToAirtable,
-} = require("../shared/airtable-pdf-attachment");
-const { generatePdf: renderPdf } = require("../shared/pdf-renderer");
+const fs = require("fs");
+const path = require("path");
 
 const CONFIG = {
     route: "/generate-monthly-pdf",
-    airtableTableName: "Record",
-    attachmentField: "Monthly Report PDF",
+    airtableTableId: "tbl02SSiR3rfuUPtQ",
+    archiveTableName: "Weekly/Monthly Report",
+    reportType: "Monthly",
+    attachmentField: "PDF attachment",
+    attachmentFieldId: "fldCOfkMDOsyDRCgE",
+    typeField: "Type",
+    typeFieldId: "fldsxYC06usuuRdjZ",
+    startField: "Start Period",
+    startFieldId: "fldgOWiP6HbcvlVzU",
+    endField: "End Period",
+    endFieldId: "fldVdA6HXisUHLNOi",
     cleanupDelayMs: 60000,
     airtableRequestTimeoutMs: 6000,
     generationDeadlineMs: 15000,
@@ -100,18 +106,10 @@ module.exports = function registerMonthlyReportPdfExtension(context) {
         try {
             await assertAttachmentFieldEmpty({
                 recordId,
+                periodStart,
+                periodEnd,
                 airtableApiKey,
                 airtableBaseId,
-                airtableTableName: CONFIG.airtableTableName,
-                attachmentField: CONFIG.attachmentField,
-                requestTimeoutMs: CONFIG.airtableRequestTimeoutMs,
-                timeoutErrorMessage:
-                    `HTTP request timed out after ` +
-                    `${CONFIG.airtableRequestTimeoutMs / 1000} seconds.`,
-                responseParser: "json",
-                conflictMessage:
-                    `CONFLICT ERROR: ${CONFIG.attachmentField} already exists on ` +
-                    `Record "${recordId}". Automatic replacement is not allowed.`,
             });
 
             const pdfBuffer = await withDeadline(
@@ -126,31 +124,10 @@ module.exports = function registerMonthlyReportPdfExtension(context) {
             const uploadResult = await attachPdfToAirtable({
                 pdfBuffer,
                 recordId,
-                filename: attachmentFilename,
+                attachmentFilename,
                 publicBaseUrl,
                 airtableApiKey,
                 airtableBaseId,
-                airtableTableName: CONFIG.airtableTableName,
-                attachmentField: CONFIG.attachmentField,
-                tempFilenamePrefix: "monthly-kpi-review",
-                cleanupDelayMs: CONFIG.cleanupDelayMs,
-                requestTimeoutMs: CONFIG.airtableRequestTimeoutMs,
-                timeoutErrorMessage:
-                    `HTTP request timed out after ` +
-                    `${CONFIG.airtableRequestTimeoutMs / 1000} seconds.`,
-                cleanupCallbacks: {
-                    onDeleted: (filename) => {
-                        console.log(
-                            `[PATRIOLLY][MONTHLY_PDF_WORKER][CLEANUP] Deleted ${filename}`
-                        );
-                    },
-                    onError: (filename, error) => {
-                        console.error(
-                            `[PATRIOLLY][MONTHLY_PDF_WORKER][CLEANUP_ERROR] ` +
-                            `${filename}: ${error.message}`
-                        );
-                    },
-                },
             });
 
             console.log(
@@ -186,19 +163,25 @@ module.exports = function registerMonthlyReportPdfExtension(context) {
 };
 
 async function generateMonthlyPdf({ htmlContent, getBrowser }, retries = 1) {
-    return renderPdf({
-        htmlContent,
-        getBrowser,
-        retries,
-        viewport: {
+    let page = null;
+
+    try {
+        const browser = await getBrowser();
+        page = await browser.newPage();
+
+        await page.setViewport({
             width: CONFIG.viewportWidth,
             height: CONFIG.viewportHeight,
-        },
-        setContentOptions: {
+        });
+        await page.emulateMediaType("print");
+
+        await page.setContent(htmlContent, {
             waitUntil: "domcontentloaded",
             timeout: CONFIG.pdfTimeoutMs,
-        },
-        styleContent: `
+        });
+
+        await page.addStyleTag({
+            content: `
                 html, body {
                     margin: 0 !important;
                     padding: 0 !important;
@@ -208,7 +191,15 @@ async function generateMonthlyPdf({ htmlContent, getBrowser }, retries = 1) {
                     print-color-adjust: exact !important;
                 }
             `,
-        pdfOptions: {
+        });
+
+        await page.evaluate(async () => {
+            if (document.fonts?.ready) {
+                await document.fonts.ready;
+            }
+        });
+
+        return await page.pdf({
             format: "A4",
             landscape: true,
             printBackground: true,
@@ -226,9 +217,193 @@ async function generateMonthlyPdf({ htmlContent, getBrowser }, retries = 1) {
                 right: "10px",
             },
             timeout: CONFIG.pdfTimeoutMs,
+        });
+    } catch (error) {
+        const message = String(error?.message || error || "Unknown error");
+
+        if (
+            retries > 0 &&
+            (message.includes("detached") ||
+                message.includes("Connection closed") ||
+                message.includes("Target closed"))
+        ) {
+            return generateMonthlyPdf(
+                { htmlContent, getBrowser },
+                retries - 1
+            );
+        }
+
+        throw new Error(`PDF generation failed: ${message}`);
+    } finally {
+        if (page) {
+            try {
+                await page.close();
+            } catch (error) {
+                console.error(
+                    `[PATRIOLLY][MONTHLY_PDF_WORKER][PAGE_CLOSE_ERROR] ` +
+                    `${error.message}`
+                );
+            }
+        }
+    }
+}
+
+async function assertAttachmentFieldEmpty({
+    recordId,
+    periodStart,
+    periodEnd,
+    airtableApiKey,
+    airtableBaseId,
+}) {
+    const url =
+        `https://api.airtable.com/v0/${airtableBaseId}/` +
+        `${CONFIG.airtableTableId}/${recordId}`;
+
+    const response = await fetchWithTimeout(url, {
+        method: "GET",
+        headers: {
+            Authorization: `Bearer ${airtableApiKey}`,
         },
-        logPrefix: "[PATRIOLLY][MONTHLY_PDF_WORKER]",
     });
+
+    if (!response.ok) {
+        const body = await response.text();
+        throw new Error(
+            `Airtable preflight returned ${response.status}: ${body}`
+        );
+    }
+
+    const record = await response.json();
+    const fields = record?.fields || {};
+    const actualType = fields[CONFIG.typeFieldId] ?? fields[CONFIG.typeField];
+    const actualStart = fields[CONFIG.startFieldId] ?? fields[CONFIG.startField];
+    const actualEnd = fields[CONFIG.endFieldId] ?? fields[CONFIG.endField];
+    const actualTypeName = typeof actualType === "string" ? actualType : actualType?.name;
+    if (record?.id !== recordId ||
+        actualTypeName !== CONFIG.reportType ||
+        normalizeDate(actualStart) !== periodStart ||
+        normalizeDate(actualEnd) !== periodEnd) {
+        throw new Error(
+            `CONFLICT ERROR: Archive record "${recordId}" is not the Monthly ` +
+            `record for ${periodStart} ~ ${periodEnd}.`
+        );
+    }
+    const attachments = fields[CONFIG.attachmentFieldId] ?? fields[CONFIG.attachmentField] ?? [];
+
+    if (Array.isArray(attachments) && attachments.length > 0) {
+        throw new Error(
+            `CONFLICT ERROR: ${CONFIG.archiveTableName}.${CONFIG.attachmentField} already exists on ` +
+            `archive record "${recordId}". Automatic replacement is not allowed.`
+        );
+    }
+}
+
+async function attachPdfToAirtable({
+    pdfBuffer,
+    recordId,
+    attachmentFilename,
+    publicBaseUrl,
+    airtableApiKey,
+    airtableBaseId,
+}) {
+    const publicDir = path.join(__dirname, "..", "public");
+    const tempFilename = buildSafeTempFilename();
+    const filePath = path.join(publicDir, tempFilename);
+
+    try {
+        if (!fs.existsSync(publicDir)) {
+            fs.mkdirSync(publicDir, { recursive: true });
+        }
+
+        await fs.promises.writeFile(filePath, pdfBuffer);
+
+        const base = String(publicBaseUrl).replace(/\/$/, "");
+        const publicUrl = `${base}/public/${encodeURIComponent(tempFilename)}`;
+        const airtableUrl =
+            `https://api.airtable.com/v0/${airtableBaseId}/` +
+            `${CONFIG.airtableTableId}`;
+
+        const response = await fetchWithTimeout(airtableUrl, {
+            method: "PATCH",
+            headers: {
+                Authorization: `Bearer ${airtableApiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                records: [
+                    {
+                        id: recordId,
+                        fields: {
+                            [CONFIG.attachmentFieldId]: [
+                                {
+                                    url: publicUrl,
+                                    filename: attachmentFilename,
+                                },
+                            ],
+                        },
+                    },
+                ],
+            }),
+        });
+
+        const responseText = await response.text();
+        if (!response.ok) {
+            throw new Error(
+                `Airtable attachment write returned ${response.status}: ${responseText}`
+            );
+        }
+
+        let responseData;
+        try {
+            responseData = JSON.parse(responseText);
+        } catch {
+            throw new Error(
+                "Airtable attachment write returned invalid JSON."
+            );
+        }
+
+        const attachments =
+            responseData?.records?.[0]?.fields?.[CONFIG.attachmentFieldId] ||
+            responseData?.records?.[0]?.fields?.[CONFIG.attachmentField] || [];
+
+        if (!Array.isArray(attachments) || attachments.length === 0) {
+            throw new Error(
+                `Airtable attachment write succeeded but ${CONFIG.attachmentField} ` +
+                `was not returned on the updated record.`
+            );
+        }
+
+        scheduleCleanup(filePath, tempFilename);
+
+        return attachments[0];
+    } catch (error) {
+        await cleanupFile(filePath, tempFilename);
+        throw error;
+    }
+}
+
+async function fetchWithTimeout(url, options) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+        () => controller.abort(),
+        CONFIG.airtableRequestTimeoutMs
+    );
+
+    try {
+        return await fetch(url, {
+            ...options,
+            signal: controller.signal,
+        });
+    } catch (error) {
+        if (error?.name === "AbortError") {
+            throw new Error(
+                `HTTP request timed out after ${CONFIG.airtableRequestTimeoutMs / 1000} seconds.`
+            );
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
 }
 
 function withDeadline(promise, timeoutMs, message) {
@@ -250,6 +425,34 @@ function buildAttachmentFilename(periodStart, periodEnd) {
         `Monthly KPI Review ( ${formatFilenameDate(periodStart)} ~ ` +
         `${formatFilenameDate(periodEnd)} ).pdf`
     );
+}
+
+function buildSafeTempFilename() {
+    return `monthly-kpi-review-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 10)}.pdf`;
+}
+
+function scheduleCleanup(filePath, filename) {
+    setTimeout(async () => {
+        await cleanupFile(filePath, filename);
+    }, CONFIG.cleanupDelayMs);
+}
+
+async function cleanupFile(filePath, filename) {
+    try {
+        if (fs.existsSync(filePath)) {
+            await fs.promises.unlink(filePath);
+            console.log(
+                `[PATRIOLLY][MONTHLY_PDF_WORKER][CLEANUP] Deleted ${filename}`
+            );
+        }
+    } catch (error) {
+        console.error(
+            `[PATRIOLLY][MONTHLY_PDF_WORKER][CLEANUP_ERROR] ${filename}: ` +
+            `${error.message}`
+        );
+    }
 }
 
 function validateContext(values) {
@@ -293,6 +496,12 @@ function addDays(value, days) {
 function getWeekday(value) {
     const [year, month, day] = value.split("-").map(Number);
     return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+function normalizeDate(value) {
+    if (!value) return "";
+    if (typeof value === "string") return value.slice(0, 10);
+    return String(value).slice(0, 10);
 }
 
 function formatFilenameDate(value) {

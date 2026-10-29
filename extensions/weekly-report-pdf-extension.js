@@ -291,7 +291,7 @@ async function attachPdfToAirtable({
     airtableApiKey,
     airtableBaseId,
 }) {
-    const publicDir = path.join(__dirname, "public");
+    const publicDir = path.join(__dirname, "..", "public");
     const tempFilename = buildSafeTempFilename();
     const filePath = path.join(publicDir, tempFilename);
 
